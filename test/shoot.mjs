@@ -1,0 +1,50 @@
+// Start de app zonder scherm, doorloopt een paar stappen en maakt screenshots.
+import { app, dialog, BrowserWindow } from 'electron';
+import fs from 'fs'; import path from 'path';
+const OUT = process.env.SHOT_DIR;
+const tmpDocs = path.join(OUT, 'docs'); fs.rmSync(tmpDocs, { recursive: true, force: true }); fs.mkdirSync(tmpDocs, { recursive: true });
+app.setPath('documents', tmpDocs);
+app.setPath('userData', path.join(OUT, 'ud'));
+dialog.showSaveDialog = async (_w, o) => ({ canceled: false, filePath: path.join(OUT, path.basename(o.defaultPath)) });
+dialog.showMessageBox = async () => ({ response: 0 });
+const sample = path.resolve('samples/voorbeeld.musicxml');
+const sample2 = path.resolve('samples/lied.musicxml');
+await import('../main.mjs');
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+app.on('browser-window-created', async (_e, win) => {
+  if (win.__shot) return; win.__shot = true;
+  if (BrowserWindow.getAllWindows().length > 1) return;
+  win.setSize(1400, 900);
+  win.webContents.on('console-message', (e) => console.log('CONSOLE', e.level, e.message, e.lineNumber));
+  await new Promise(r => win.webContents.once('did-finish-load', r));
+  const js = (c) => win.webContents.executeJavaScript(c);
+  const shot = async (n) => { await sleep(700); fs.writeFileSync(path.join(OUT, n + '.png'), (await win.webContents.capturePage()).toPNG()); };
+  try {
+    await sleep(500);
+    await js(`window.api.importFiles([${JSON.stringify(sample2)}])`);
+    await js(`window.api.importFiles([${JSON.stringify(sample)}])`);
+    await sleep(800);
+    await js(`document.querySelector('#btn-back').click()`);
+    await shot('1-start');
+    await js(`document.querySelector('.card[data-id]').click()`);
+    await sleep(900);
+    await shot('2-editor');
+    await js(`(async()=>{const c=document.querySelector('#command'); c.value='van F naar G'; c.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}));})()`);
+    await sleep(900);
+    await shot('3-getransponeerd');
+    await js(`document.querySelector('#version-name').value='Zang in G'; document.querySelector('#btn-save-version').click()`);
+    await sleep(300);
+    await js(`document.querySelector('[data-mode=split]').click(); document.querySelector('[data-ptab=versions]').click()`);
+    await sleep(900);
+    await shot('4-naast-elkaar');
+    await js(`document.querySelector('#command').focus()`);
+    await shot('5-suggesties');
+    const id = await js(`(async()=> (await window.api.listProjects())[0].id)()`);
+    const pdf = await js(`window.api.exportPdf(${JSON.stringify(id)}, {steps:1,semis:2}, 'Zang in G')`);
+    console.log('PDF:', pdf, fs.existsSync(pdf) ? fs.statSync(pdf).size : 'missing');
+    const xml = await js(`window.api.exportMusicXml(${JSON.stringify(id)}, {steps:1,semis:2}, 'Zang in G')`);
+    console.log('XML:', xml);
+    console.log(JSON.stringify(await js(`window.api.getSettings()`)));
+  } catch (e) { console.error('FOUT', e); }
+  app.quit();
+});

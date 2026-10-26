@@ -1,0 +1,35 @@
+// Veilige brug tussen interface en hoofdprogramma
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
+
+const call = (ch) => (...args) => ipcRenderer.invoke(ch, ...args);
+
+contextBridge.exposeInMainWorld('api', {
+  listProjects: call('projects:list'),
+  importFiles: call('projects:import'),
+  getProject: call('project:get'),
+  updateProject: call('project:update'),
+  deleteProject: call('project:delete'),
+  retryOmr: call('project:retryOmr'),
+  replaceScore: call('project:replaceScore'),
+  render: call('score:render'),
+  keys: call('theory:keys'),
+  interval: call('theory:interval'),
+  parseCommand: call('command:parse'),
+  exportPdf: call('export:pdf'),
+  exportMusicXml: call('export:musicxml'),
+  openInMuseScore: call('open:musescore'),
+  openOriginal: call('open:original'),
+  originalBytes: call('original:bytes'),
+  openFolder: call('open:folder'),
+  openUrl: call('open:url'),
+  getSettings: call('settings:get'),
+  setSettings: call('settings:set'),
+  pickAudiveris: call('settings:pickAudiveris'),
+  pathForFile: (file) => webUtils.getPathForFile(file),
+  updateStatus: call('update:status'),
+  checkForUpdates: call('update:check'),
+  installUpdate: call('update:install'),
+  whatsNew: call('update:whatsNew'),
+  onUpdateStatus: (cb) => ipcRenderer.on('update-status', (_e, s) => cb(s)),
+  onProjectUpdated: (cb) => ipcRenderer.on('project-updated', (_e, p) => cb(p)),
+});

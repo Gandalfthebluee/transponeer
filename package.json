@@ -1,0 +1,102 @@
+{
+  "name": "transponeer",
+  "productName": "Transponeer",
+  "version": "1.2.0",
+  "description": "Bladmuziek uit PDF's transponeren, met projecten, notities en PDF-export",
+  "main": "main.mjs",
+  "author": "Tom",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "test": "node test/check.mjs",
+    "vendor": "node scripts/fetch-vendor.mjs",
+    "dist": "electron-builder --win nsis --x64",
+    "release": "electron-builder --win nsis --x64 --publish always"
+  },
+  "dependencies": {
+    "@xmldom/xmldom": "^0.9.8",
+    "adm-zip": "^0.5.16",
+    "electron-updater": "^6.8.11",
+    "jimp": "^1.6.1",
+    "pdfjs-dist": "^4.10.38",
+    "verovio": "^6.3.0"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "nl.tom.transponeer",
+    "productName": "Transponeer",
+    "files": [
+      "main.mjs",
+      "preload.cjs",
+      "CHANGELOG.md",
+      "lib/**",
+      "renderer/**",
+      "package.json",
+      "!**/*.map",
+      "!**/*.d.ts",
+      "!node_modules/verovio/dist/verovio-module-hum.mjs",
+      "!node_modules/verovio/dist/verovio-toolkit*.js",
+      "!node_modules/verovio/dist/verovio-toolkit*.mjs",
+      "!node_modules/pdfjs-dist/legacy/**",
+      "!node_modules/pdfjs-dist/web/**",
+      "!node_modules/pdfjs-dist/types/**",
+      "!node_modules/pdfjs-dist/image_decoders/**",
+      "!node_modules/pdfjs-dist/build/pdf.mjs",
+      "!node_modules/pdfjs-dist/build/pdf.worker.mjs",
+      "!node_modules/pdfjs-dist/build/pdf.sandbox*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "renderer/icon.ico",
+      "artifactName": "Transponeer-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Transponeer",
+      "deleteAppDataOnUninstall": false
+    },
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "electronLanguages": [
+      "nl",
+      "en-US"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/audiveris",
+        "to": "audiveris"
+      },
+      {
+        "from": "vendor/tessdata",
+        "to": "tessdata"
+      }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Gandalfthebluee",
+        "repo": "transponeer",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Gandalfthebluee/transponeer.git"
+  }
+}

@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' file: data:; style-src 'self' 'unsafe-inline'; img-src 'self' file: data:; frame-src file:; object-src file:; worker-src 'self' file: blob:">
+  <title>Transponeer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Bovenbalk met tabbladen, zoals MuseScore 4 -->
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" class="logo"><path d="M9 18V5l11-2v13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="6" cy="18" r="3" fill="currentColor"/><circle cx="17" cy="16" r="3" fill="currentColor"/></svg>
+      Transponeer
+    </div>
+    <nav class="tabs">
+      <button class="tab active" data-view="home">Start</button>
+      <button class="tab" data-view="editor" id="tab-editor" disabled>Partituur</button>
+    </nav>
+    <div class="topbar-right">
+      <button class="icon-btn" id="btn-settings" title="Instellingen">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ============ STARTSCHERM ============ -->
+  <main id="view-home" class="view active">
+    <aside class="home-side">
+      <button class="side-item active">
+        <svg viewBox="0 0 24 24"><path d="M4 4h6v16H4zM14 4h6v16h-6z"/></svg> Mijn partituren
+      </button>
+      <button class="side-item" id="side-folder">
+        <svg viewBox="0 0 24 24"><path d="M3 6h6l2 2h10v11H3z"/></svg> Map openen
+      </button>
+      <button class="side-item" id="side-help">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17h.01"/></svg> Hulp
+      </button>
+      <div class="side-spacer"></div>
+      <div class="omr-status" id="omr-status"></div>
+      <div class="omr-status" id="update-status"></div>
+    </aside>
+
+    <section class="home-main">
+      <div class="home-head">
+        <h1>Partituren</h1>
+        <div class="home-actions">
+          <div class="search">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+            <input id="search" placeholder="Zoeken">
+          </div>
+          <button class="btn primary" id="btn-import">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> Importeren
+          </button>
+        </div>
+      </div>
+      <div class="grid" id="grid"></div>
+      <div class="drop-hint" id="drop-hint">Laat los om te importeren</div>
+    </section>
+  </main>
+
+  <!-- ============ EDITOR ============ -->
+  <main id="view-editor" class="view">
+    <div class="toolbar">
+      <button class="icon-btn" id="btn-back" title="Terug naar overzicht">
+        <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <div class="titles"><input class="title-input" id="title-input" spellcheck="false" placeholder="Titel"><input class="composer-input" id="composer-input" spellcheck="false" placeholder="Componist"></div>
+
+      <div class="command">
+        <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        <input id="command" placeholder="Typ een opdracht, bijvoorbeeld: 3 halve tonen omhoog" autocomplete="off" spellcheck="false">
+        <div class="command-msg" id="command-msg"></div>
+        <div class="suggest" id="suggest"></div>
+      </div>
+
+      <div class="seg" id="viewmode">
+        <button data-mode="score" class="on" title="Alleen de getransponeerde partituur">Partituur</button>
+        <button data-mode="split" title="Origineel en herkende versie naast elkaar">Naast elkaar</button>
+      </div>
+
+      <div class="zoom">
+        <button class="icon-btn small" id="zoom-out" title="Uitzoomen"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+        <span id="zoom-label">100%</span>
+        <button class="icon-btn small" id="zoom-in" title="Inzoomen"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+      </div>
+
+      <button class="btn primary" id="btn-pdf">
+        <svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg> PDF
+      </button>
+      <div class="menu-wrap">
+        <button class="icon-btn" id="btn-more" title="Meer">
+          <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="19" cy="12" r="1.5" fill="currentColor"/></svg>
+        </button>
+        <div class="menu" id="more-menu">
+          <button data-act="musicxml">MusicXML exporteren</button>
+          <button data-act="musescore">Openen in MuseScore</button>
+          <button data-act="replace">Gecorrigeerde versie inladen…</button>
+          <hr>
+          <button data-act="original">Origineel bestand openen</button>
+          <button data-act="retry">Opnieuw herkennen</button>
+          <button data-act="folder">Projectmap openen</button>
+          <hr>
+          <button data-act="delete" class="danger">Project verwijderen</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="editor-body">
+      <aside class="panel">
+        <div class="panel-tabs">
+          <button class="ptab on" data-ptab="transpose">Transponeren</button>
+          <button class="ptab" data-ptab="versions">Versies</button>
+          <button class="ptab" data-ptab="notes">Notities</button>
+        </div>
+
+        <div class="ptab-body on" id="ptab-transpose">
+          <div class="keybox">
+            <div><span class="lbl">Origineel</span><span id="key-original">–</span></div>
+            <svg viewBox="0 0 24 24" class="arrow"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+            <div><span class="lbl">Nu</span><strong id="key-now">–</strong></div>
+          </div>
+          <div class="interval-desc" id="interval-desc">Origineel</div>
+
+          <section class="pgroup">
+            <h3>Halve tonen</h3>
+            <div class="stepper">
+              <button id="semi-down" title="Halve toon omlaag">−</button>
+              <output id="semi-value">0</output>
+              <button id="semi-up" title="Halve toon omhoog">+</button>
+            </div>
+            <div class="row2">
+              <button class="chip" id="oct-down">Octaaf omlaag</button>
+              <button class="chip" id="oct-up">Octaaf omhoog</button>
+            </div>
+          </section>
+
+          <section class="pgroup">
+            <h3>Naar toonsoort</h3>
+            <div class="seg small full" id="key-dir">
+              <button data-dir="nearest" class="on">Dichtstbij</button>
+              <button data-dir="up">Omhoog</button>
+              <button data-dir="down">Omlaag</button>
+            </div>
+            <div class="keys" id="keys"></div>
+          </section>
+
+          <section class="pgroup">
+            <h3>Voor instrument</h3>
+            <div class="instr" id="instr">
+              <button data-steps="0" data-semis="0">C<small>concert</small></button>
+              <button data-steps="1" data-semis="2">B♭<small>klarinet, trompet</small></button>
+              <button data-steps="5" data-semis="9">E♭<small>altsax</small></button>
+              <button data-steps="4" data-semis="7">F<small>hoorn</small></button>
+            </div>
+          </section>
+
+          <section class="pgroup">
+            <h3>Spelling bij halve tonen</h3>
+            <div class="seg small full" id="pref">
+              <button data-pref="auto" class="on">Automatisch</button>
+              <button data-pref="sharps">♯ kruizen</button>
+              <button data-pref="flats">♭ mollen</button>
+            </div>
+          </section>
+
+          <button class="btn ghost full" id="btn-reset">Terug naar origineel</button>
+        </div>
+
+        <div class="ptab-body" id="ptab-versions">
+          <p class="hint">Bewaar transposities die je vaker nodig hebt, bijvoorbeeld "Zang in G" of "Klarinetpartij".</p>
+          <div class="save-version">
+            <input id="version-name" placeholder="Naam van deze versie">
+            <button class="btn primary" id="btn-save-version">Bewaar</button>
+          </div>
+          <ul class="versions" id="versions"></ul>
+        </div>
+
+        <div class="ptab-body" id="ptab-notes">
+          <textarea id="notes" placeholder="Notities bij dit stuk: voor wie, welke maten lastig zijn, wat je hebt aangepast…"></textarea>
+          <div class="saved" id="notes-saved"></div>
+        </div>
+      </aside>
+
+      <section class="canvas-wrap">
+        <div class="banner" id="banner"></div>
+        <div class="canvas" id="canvas">
+          <div class="pane original" id="pane-original" data-label="Origineel"></div>
+          <div class="pane score" id="pane-score" data-label="Getransponeerd"></div>
+        </div>
+        <div class="statusbar" id="statusbar"></div>
+      </section>
+    </div>
+  </main>
+
+  <!-- Instellingen -->
+  <dialog id="dlg-settings">
+    <form method="dialog">
+      <h2>Instellingen</h2>
+      <label>Audiveris (notenherkenning)</label>
+      <div class="path-row">
+        <code id="aud-path">–</code>
+        <button type="button" class="btn" id="btn-pick-aud">Kies…</button>
+      </div>
+      <p class="hint" id="aud-hint"></p>
+      <label for="scale">Grootte van de noten</label>
+      <div class="range-row"><input type="range" id="scale" min="30" max="80" step="5"><span id="scale-val"></span></div>
+      <p class="hint">Grotere noten betekent minder maten per pagina, ook in de PDF.</p>
+      <p class="hint">Projecten staan in: <code id="data-dir"></code></p>
+      <label>Updates</label>
+      <div class="path-row">
+        <code id="upd-text">–</code>
+        <button type="button" class="btn" id="btn-check-upd">Nu controleren</button>
+      </div>
+      <p class="hint">Transponeer versie <span id="app-version"></span>. Nieuwe versies worden vanzelf gedownload; je stukken blijven altijd bewaard en er wordt eerst een reservekopie gemaakt.</p>
+      <div class="dlg-actions"><button class="btn primary" value="ok">Klaar</button></div>
+    </form>
+  </dialog>
+
+  <!-- Hulp -->
+  <dialog id="dlg-help">
+    <form method="dialog">
+      <h2>Zo werkt het</h2>
+      <ol class="help">
+        <li><b>Importeer</b> een PDF, foto of MusicXML-bestand. Bij een PDF leest Audiveris de noten (dit duurt even per pagina).</li>
+        <li><b>Controleer</b> de herkenning met <i>Naast elkaar</i>. Klopt er iets niet? Kies <i>Openen in MuseScore</i>, verbeter het daar, sla op, en kies <i>Gecorrigeerde versie inladen</i>.</li>
+        <li><b>Transponeer</b> met de knoppen of typ een opdracht.</li>
+        <li><b>Download</b> als PDF.</li>
+      </ol>
+      <h3>Sneltoetsen</h3>
+      <p class="hint"><code>Ctrl+K</code> typbalk · <code>↑</code>/<code>↓</code> halve toon · <code>Ctrl +</code>/<code>Ctrl −</code> zoom · <code>Ctrl+P</code> PDF</p>
+      <h3>Waar staat alles?</h3>
+      <p class="hint">Je stukken staan in Documenten\Transponeer\projecten (knop <i>Map openen</i>). Bij een nieuwe versie van de app blijven ze gewoon staan.</p>
+      <h3>Voorbeeldopdrachten</h3>
+      <div class="examples" id="examples"></div>
+      <div class="dlg-actions"><button class="btn primary" value="ok">Sluiten</button></div>
+    </form>
+  </dialog>
+
+  <!-- Wat is nieuw -->
+  <dialog id="dlg-new">
+    <form method="dialog">
+      <h2 id="new-title">Wat is nieuw</h2>
+      <ul class="help" id="new-items"></ul>
+      <div class="dlg-actions"><button class="btn primary" value="ok">Mooi</button></div>
+    </form>
+  </dialog>
+
+  <div class="toasts" id="toasts"></div>
+  <script type="module" src="pdfview.mjs"></script>
+  <script src="app.js"></script>
+</body>
+</html>

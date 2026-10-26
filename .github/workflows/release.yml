@@ -1,0 +1,37 @@
+# Bouwt de Windows-installer en zet hem online als release.
+# Start vanzelf als er een tag als v1.2.0 wordt gepusht.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Onderdelen installeren
+        run: npm ci
+
+      - name: Tests
+        run: npm test
+
+      - name: Audiveris en taalbestanden ophalen
+        run: npm run vendor
+
+      - name: Installer bouwen en publiceren
+        run: npx electron-builder --win nsis --x64 --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
