@@ -1,5 +1,10 @@
 # Wat is nieuw
 
+## 1.2.1
+- Eerste versie met automatische updates: vanaf nu komen nieuwe versies vanzelf binnen.
+- Echte installer met snelkoppeling in het Startmenu en op het bureaublad.
+- Voor elke update wordt een reservekopie van je stukken gemaakt (Documenten\Transponeer\reservekopieën).
+
 ## 1.2.0
 - Transponeer werkt zichzelf nu bij: nieuwe versies worden vanzelf gedownload en je krijgt een melding "Nu herstarten".
 - Echte installer met snelkoppeling in het Startmenu en op het bureaublad.

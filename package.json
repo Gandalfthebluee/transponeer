@@ -1,7 +1,7 @@
 {
   "name": "transponeer",
   "productName": "Transponeer",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Bladmuziek uit PDF's transponeren, met projecten, notities en PDF-export",
   "main": "main.mjs",
   "author": "Tom",

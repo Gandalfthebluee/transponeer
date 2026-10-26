@@ -52,18 +52,49 @@ jobs:
         if: steps.v.outputs.skip != 'true'
         run: npm run vendor
 
-      - name: Installer bouwen en publiceren
+      - name: Installer bouwen
         if: steps.v.outputs.skip != 'true'
         shell: bash
         run: |
           set -o pipefail
-          npx electron-builder --win nsis --x64 --publish always 2>&1 | tee build.log
+          npx electron-builder --win nsis --x64 --publish never 2>&1 | tee build.log
+          ls -la dist
+
+      - name: Release online zetten
+        if: steps.v.outputs.skip != 'true'
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -o pipefail
+          # opmerkingen voor deze versie uit CHANGELOG.md
+          awk -v v="$VERSION" '/^## /{p=($2==v)} p && !/^## /' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "Kleine verbeteringen." > notes.md
+          gh release create "v$VERSION" \
+            dist/Transponeer-Setup-$VERSION.exe \
+            dist/Transponeer-Setup-$VERSION.exe.blockmap \
+            dist/latest.yml \
+            --title "Transponeer $VERSION" --notes-file notes.md --target "$GITHUB_SHA" 2>&1 | tee -a build.log
+
+      - name: Onvolledige releases opruimen
+        if: steps.v.outputs.skip != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          # releases zonder latest.yml kunnen niet voor updates gebruikt worden
+          for tag in $(gh release list --limit 50 --json tagName -q '.[].tagName'); do
+            [ "$tag" = "v$VERSION" ] && continue
+            if ! gh release view "$tag" --json assets -q '.assets[].name' | grep -qx latest.yml; then
+              echo "Opruimen: $tag"; gh release delete "$tag" --yes --cleanup-tag || true
+            fi
+          done
 
       - name: Foutmelding tonen
         if: failure()
         shell: bash
         run: |
-          for f in build.log; do [ -f "$f" ] && tail -n 40 "$f" | sed 's/%/%25/g' | while IFS= read -r line; do echo "::error::$line"; done; done
+          [ -f build.log ] && tail -n 40 build.log | sed 's/%/%25/g' | while IFS= read -r line; do echo "::error::$line"; done
           true
