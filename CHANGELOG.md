@@ -1,5 +1,13 @@
 # Wat is nieuw
 
+## 1.4.0
+- Meerdere schermafbeeldingen in één stuk: plak ze (Ctrl+V) of sleep ze in een geopend stuk. Elke afbeelding wordt apart gelezen, ook als ze verschillend van formaat zijn.
+- Maten die op twee schermafbeeldingen staan (overlap) worden automatisch één keer gebruikt.
+- Nieuw tabblad Bronnen: afbeeldingen ordenen, verwijderen of opnieuw laten lezen.
+- Nieuwe weergave Per regel: boven elke herkende regel het stukje origineel waar die regel vandaan komt. Noten verbeteren werkt ook hier.
+- Afbeeldingen worden geschaald op de grootte van de noten in plaats van de breedte van het plaatje; ook een smal knipsel van één regel wordt goed gelezen.
+- Akkoorden die de herkenning als losse tekst zag (zoals "Dmó" of "E07") worden alsnog echte akkoorden (Dm6, Eø7).
+
 ## 1.3.0
 - Tweede herkenningsprogramma (homr, met AI) erbij, sterk in foto's en schermafbeeldingen. De app laat beide programma's lezen en kiest het beste resultaat; met één klik zie je de andere versie.
 - Kiest de app homr, dan worden de akkoorden van Audiveris erbij gezet.

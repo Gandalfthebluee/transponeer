@@ -98,10 +98,13 @@ api.onProjectUpdated((s) => {
   if ($('#view-home').classList.contains('active')) drawGrid();
   if (state.project && state.project.id === s.id) {
     const wasReady = state.project.status === 'ready';
+    const wasBusy = state.project.busy;
     state.project.status = s.status;
     state.project.statusText = s.statusText;
-    if (s.status === 'ready' && !wasReady) openProject(s.id);
+    state.project.busy = s.busy;
+    if (s.status === 'ready' && (!wasReady || (wasBusy && !s.busy))) openProject(s.id, { keepView: true });
     else if (s.status !== 'ready') drawScoreState();
+    else if (s.busy) drawBusy();
   }
 });
 
@@ -121,6 +124,11 @@ async function pasteImage() {
 }
 $('#btn-paste').onclick = pasteImage;
 document.addEventListener('paste', (e) => {
+  if (/INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+  if ($('#view-editor').classList.contains('active') && state.project) {
+    if (state.project.sourceType === 'musicxml') return;
+    e.preventDefault(); addPastedSource(); return;
+  }
   if (!$('#view-home').classList.contains('active')) return;
   if (/INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
   e.preventDefault(); pasteImage();
@@ -137,6 +145,11 @@ window.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth =
 window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('drop', (e) => {
   e.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging');
+  if ($('#view-editor').classList.contains('active') && state.project && state.project.sourceType !== 'musicxml') {
+    const paths = [...e.dataTransfer.files].map(f => api.pathForFile(f)).filter(p => /\.(pdf|png|jpe?g|tiff?|bmp|gif)$/i.test(p));
+    if (paths.length) api.addSource(state.project.id, paths).then(n => n && toast(`${n} ${n === 1 ? 'afbeelding' : 'afbeeldingen'} toegevoegd; wordt gelezen…`, 'ok'));
+    return;
+  }
   if (!$('#view-home').classList.contains('active')) return;
   const paths = [...e.dataTransfer.files].map(f => api.pathForFile(f)).filter(p => /\.(pdf|png|jpe?g|tiff?|mxl|musicxml|xml)$/i.test(p));
   if (paths.length) importFiles(paths);
@@ -144,7 +157,7 @@ window.addEventListener('drop', (e) => {
 });
 
 // ---------- editor ----------
-async function openProject(id) {
+async function openProject(id, { keepView = false } = {}) {
   const p = await api.getProject(id);
   if (!p) return toast('Project niet gevonden', 'err');
   state.project = p;
@@ -160,12 +173,19 @@ async function openProject(id) {
   $('#notes').value = p.notes || '';
   $('#notes-saved').textContent = '';
   $('#command-msg').textContent = '';
-  setEditing(false); state.undo = 0;
-  showView('editor');
+  if (!keepView) { setEditing(false); state.undo = 0; }
+  if ($('#view-editor').classList.contains('active') === false) showView('editor');
   drawOriginal();
+  drawSources();
   drawKeys();
   drawVersions();
   drawScoreState();
+}
+
+function drawBusy() {
+  const b = $('#banner');
+  b.className = 'banner show';
+  b.innerHTML = `<span class="spinner"></span><span>${esc(state.project.busy)}</span>`;
 }
 
 function drawScoreState() {
@@ -173,8 +193,9 @@ function drawScoreState() {
   const pane = $('#pane-score');
   const banner = $('#banner');
   banner.className = 'banner';
+  if (p.status === 'ready' && p.busy) { drawBusy(); render(); return; }
   if (p.status === 'ready') {
-    const E = { audiveris: 'Audiveris', homr: 'homr' };
+    const E = { audiveris: 'Audiveris', homr: 'homr', mix: 'Audiveris en homr' };
     const eng = p.engines || {};
     const other = Object.keys(eng).find(n => n !== p.engine && eng[n] && !eng[n].error);
     const cur = eng[p.engine];
@@ -219,12 +240,15 @@ function drawScoreState() {
 function drawOriginal() {
   const p = state.project;
   const pane = $('#pane-original');
-  if (p.sourceType === 'musicxml') { pane.innerHTML = ''; return; } // wordt bij render gevuld
-  if (/\.pdf$/i.test(p.originalFile)) {
-    const go = async () => window.renderPdfInto(await api.originalBytes(p.id), pane);
-    if (window.renderPdfInto) go(); else window.addEventListener('load', go, { once: true });
+  if (p.sourceType === 'musicxml' || !p.sources?.length) { pane.innerHTML = ''; return; } // wordt bij render gevuld
+  pane.innerHTML = p.sources.map(s => `<div class="src-block" data-src="${s.id}"></div>`).join('');
+  for (const src of p.sources) {
+    const block = pane.querySelector(`[data-src="${src.id}"]`);
+    if (src.isPdf) {
+      const go = async () => window.renderPdfInto(await api.originalBytes(p.id, src.file), block);
+      if (window.renderPdfInto) go(); else window.addEventListener('load', go, { once: true });
+    } else block.innerHTML = `<img src="${src.url}" alt="Afbeelding ${src.n}">`;
   }
-  else pane.innerHTML = `<img src="${p.originalUrl}" alt="Origineel">`;
 }
 
 async function render() {
@@ -232,6 +256,7 @@ async function render() {
   if (!p || p.status !== 'ready') return;
   const token = ++state.renderToken;
   updatePanel();
+  if (state.mode === 'lines') return renderLinesView(token);
   try {
     const r = await api.render(p.id, state.iv);
     if (token !== state.renderToken) return;
@@ -247,6 +272,29 @@ async function render() {
       const o = await api.render(p.id, { steps: 0, semis: 0 });
       $('#pane-original').innerHTML = o.pages.map(svg => `<div class="page">${svg}</div>`).join('');
     }
+  } catch (e) {
+    $('#pane-score').innerHTML = `<div class="state"><h2>Kan niet tekenen</h2><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+async function renderLinesView(token) {
+  const p = state.project;
+  try {
+    const [r, info] = await Promise.all([api.renderLines(p.id, state.iv), api.render(p.id, state.iv)]);
+    if (token !== state.renderToken) return;
+    const pane = $('#pane-score');
+    const scrollTop = pane.scrollTop;
+    const noStrips = r.lines.every(l => !l.strip);
+    pane.innerHTML = `<div class="lines-wrap">${r.label ? `<div class="lines-label">${esc(r.label)}</div>` : ''}
+      ${noStrips ? '<div class="lines-label">Geen stukjes origineel beschikbaar. Kies "Opnieuw herkennen" in het menu om ze te maken.</div>' : ''}
+      ${r.lines.map((l, i) => `<div class="line"><div class="line-head"><span>Regel ${i + 1}</span><span>vanaf maat ${l.measure}</span></div>
+        ${l.strip ? `<img class="strip" src="${l.strip}" alt="Origineel regel ${i + 1}">` : '<div class="nostrip">Geen stukje origineel voor deze regel</div>'}
+        <div class="line-svg">${l.svg}</div></div>`).join('')}</div>`;
+    pane.scrollTop = scrollTop;
+    $('#key-now').textContent = info.keyName || '–';
+    $('#interval-desc').textContent = info.description;
+    $('#statusbar').innerHTML = `<span>${r.lines.length} regels</span><span>Toonsoort: ${esc(info.keyName)}</span><span>${esc(info.description)}</span><span>Zoom ${Math.round(state.zoom * 100)}%</span>`;
+    if (state.editing) markSelection();
   } catch (e) {
     $('#pane-score').innerHTML = `<div class="state"><h2>Kan niet tekenen</h2><p>${esc(e.message)}</p></div>`;
   }
@@ -350,7 +398,8 @@ function setMode(m) {
   state.mode = m;
   $$('#viewmode button').forEach(b => b.classList.toggle('on', b.dataset.mode === m));
   $('#canvas').classList.toggle('split', m === 'split');
-  if (state.project?.sourceType === 'musicxml' && m === 'split') render();
+  $('#canvas').classList.toggle('lines', m === 'lines');
+  if (state.project?.status === 'ready') render();
 }
 $$('#viewmode button').forEach(b => b.onclick = () => setMode(b.dataset.mode));
 function setZoom(z) {
@@ -426,6 +475,41 @@ async function saveVersion() {
 $('#btn-save-version').onclick = saveVersion;
 $('#version-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') saveVersion(); });
 
+// ---------- bronnen ----------
+function drawSources() {
+  const p = state.project;
+  const list = p.sources || [];
+  const E = { audiveris: 'Audiveris', homr: 'homr' };
+  $('#sources').innerHTML = list.length ? list.map((src, i) => {
+    const e = src.engines?.[src.engine];
+    let meta = src.recognized && e ? `${e.measures} maten · ${E[src.engine]}` : src.error ? esc(src.error) : 'Wordt gelezen…';
+    if (src.strips?.length) meta += ` · ${src.strips.length} ${src.strips.length === 1 ? 'regel' : 'regels'}`;
+    return `<li data-id="${src.id}">
+      <div class="sthumb" style="${src.isPdf ? '' : `background-image:url('${src.url}')`}">${src.isPdf ? 'PDF' : ''}</div>
+      <div><div class="sname">Afbeelding ${i + 1}</div><div class="smeta ${src.error && !src.recognized ? 'err' : ''}">${meta}</div></div>
+      <div class="sbtns">
+        <button data-a="up" title="Eerder" ${i === 0 ? 'disabled' : ''}>▲</button>
+        <button data-a="down" title="Later" ${i === list.length - 1 ? 'disabled' : ''}>▼</button>
+        <button data-a="${src.error && !src.recognized ? 'retry' : 'remove'}" title="${src.error && !src.recognized ? 'Opnieuw lezen' : 'Uit dit stuk halen'}">${src.error && !src.recognized ? '↻' : '✕'}</button>
+      </div></li>`;
+  }).join('') : '<li class="empty" style="display:block;border:0;background:none;padding:0;color:var(--muted)">Dit stuk komt uit een MusicXML-bestand.</li>';
+  $$('#sources li[data-id] button').forEach(b => b.onclick = async () => {
+    const sid = b.closest('li').dataset.id;
+    const a = b.dataset.a;
+    if (a === 'up' || a === 'down') { if (await api.moveSource(p.id, sid, a === 'up' ? -1 : 1)) openProject(p.id, { keepView: true }); }
+    else if (a === 'remove') { if (await api.removeSource(p.id, sid)) openProject(p.id, { keepView: true }); }
+    else if (a === 'retry') { await api.retrySource(p.id, sid); toast('Opnieuw aan het lezen…'); }
+  });
+}
+async function addPastedSource() {
+  if (!state.project) return;
+  const r = await api.pasteSource(state.project.id);
+  if (!r) return toast('Er staat geen afbeelding op het klembord. Maak eerst een schermafbeelding (Windows-toets + Shift + S).', 'err');
+  toast('Afbeelding toegevoegd; wordt gelezen…', 'ok');
+}
+$('#btn-src-paste').onclick = addPastedSource;
+$('#btn-src-file').onclick = async () => { const n = await api.addSource(state.project.id); if (n) toast(`${n} ${n === 1 ? 'bestand' : 'bestanden'} toegevoegd; wordt gelezen…`, 'ok'); };
+
 // ---------- noten verbeteren ----------
 state.editing = false; state.sel = null; state.undo = 0;
 function setEditing(on) {
@@ -435,7 +519,7 @@ function setEditing(on) {
   $('#btn-edit').classList.toggle('on', on);
   $('#editbar').classList.toggle('show', on);
   $('#pane-score').classList.toggle('editing', on);
-  if (on) { setMode('split'); updateEditBar(); }
+  if (on) { if (state.mode === 'score') setMode('split'); updateEditBar(); }
   else { $$('.page g.sel').forEach(g => g.classList.remove('sel')); if (was) api.refreshThumb(state.project.id); }
 }
 function selectedEl() { return state.sel === null ? null : $(`#pane-score g[id="tp${state.sel}"]`); }

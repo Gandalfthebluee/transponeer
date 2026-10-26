@@ -26,6 +26,8 @@ origineel, de herkende noten en je notities).
   Fout gevonden? Menu `•••` → *Openen in MuseScore*, verbeter, sla op als MusicXML,
   en kies *Gecorrigeerde versie inladen…*.
 - **Plakken**: maak een schermafbeelding (Windows-toets + Shift + S, bijvoorbeeld van YouTube) en druk in het startscherm op Ctrl+V.
+- **Meer schermafbeeldingen in één stuk**: open het stuk en druk weer op Ctrl+V (of sleep een afbeelding erin). Overlap met de vorige afbeelding wordt automatisch weggelaten. In het tabblad *Bronnen* zet je ze in de goede volgorde.
+- **Per regel**: toont boven elke herkende regel het stukje origineel, zodat je regel voor regel vergelijkt.
 - **Twee herkenningsprogramma's**: Audiveris (sterk in nette PDF's, leest akkoorden) en homr (AI, sterk in foto's).
   De app kiest het beste resultaat; bovenaan kun je de andere versie bekijken.
 - **Noten verbeteren**: knop *Verbeteren* (of toets E). Klik een noot aan; ↑/↓ toonhoogte, Shift+↑/↓ octaaf,

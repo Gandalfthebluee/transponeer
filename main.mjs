@@ -6,13 +6,13 @@ import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { randomUUID } from 'crypto';
 
-import { readScoreFile, transposeXml, scoreInfo, withMeta, cleanRecognized, hasEncodedBreaks, midiNotes, editNote, tagEvents } from './lib/musicxml.mjs';
+import { readScoreFile, transposeXml, scoreInfo, withMeta, cleanRecognized, hasEncodedBreaks, midiNotes, editNote, tagEvents, splitLines } from './lib/musicxml.mjs';
 import { INSTRUMENTS, instrumentInterval, fitOctave, byId } from './lib/instruments.mjs';
-import { renderPages } from './lib/render.mjs';
+import { renderPages, renderLine } from './lib/render.mjs';
 import { findAudiveris, bundledAudiveris, runOmr, pdfDpi } from './lib/omr.mjs';
-import { prepareImage, IMAGE_EXT } from './lib/image.mjs';
+import { prepareImage, IMAGE_EXT, cropStaffStrips, TARGET_INTERLINE } from './lib/image.mjs';
 import { setupUpdates } from './lib/updates.mjs';
-import { findHomr, runHomrImage, mergePages, quality, transferHarmonies } from './lib/engines.mjs';
+import { findHomr, runHomrImage, mergePages, quality, transferHarmonies, systemIndexPerMeasure, overlapMeasures, dropMeasures, measureCount } from './lib/engines.mjs';
 import { rasterizePdf } from './lib/pdfraster.mjs';
 import { parseCommand } from './lib/commands.mjs';
 import { keyName, describeInterval, keyToTonic, transposePitchClass, tonicToFifths, intervalFromSemitones, intervalBetweenTonics, addIntervals, KEY_CHOICES } from './lib/theory.mjs';
@@ -50,6 +50,7 @@ function summary(p) {
     keyName: p.fifths !== undefined ? keyName(p.fifths, p.mode) : '',
     currentKey: currentKeyName(p, p.current),
     versions: (p.versions || []).length,
+    sources: (p.sources || []).length, busy: p.busy || '',
     thumb: fs.existsSync(thumb) ? fs.readFileSync(thumb, 'utf8') : null,
   };
 }
@@ -80,104 +81,188 @@ async function finishScore(p, xml, { recognized = false, alreadyClean = false } 
   send('project-updated', summary(p));
 }
 
-// Herkenning 1: Audiveris (sterk in nette PDF's, leest ook akkoorden)
-async function recognizeAudiveris(p, exe, progress) {
-  const outDir = path.join(pdir(p.id), 'herkenning');
-  const original = path.join(pdir(p.id), p.originalFile);
-  fs.rmSync(outDir, { recursive: true, force: true });
-  let input = original, factor = null, dpi = null;
-  if (IMAGE_EXT.test(p.originalFile)) {
-    input = path.join(pdir(p.id), 'voor-herkenning.png');
-    ({ factor } = await prepareImage(original, input));
-  }
-  let result;
-  try {
-    result = await runOmr(exe, input, outDir, progress, { dpi });
-  } catch (e) {
-    // te kleine noten: één keer opnieuw met een sterkere vergroting / hogere resolutie
-    if (!e.interline) throw e;
-    const boost = 20 / e.interline;
-    progress('Audiveris: opnieuw met hogere resolutie…');
-    fs.rmSync(outDir, { recursive: true, force: true });
-    if (input !== original) ({ factor } = await prepareImage(original, input, { factor: (factor || 1) * boost }));
-    else dpi = Math.min(600, Math.round((pdfDpi(original) || 300) * boost));
-    result = await runOmr(exe, input, outDir, progress, { dpi });
-  }
-  const mxl = result.files.find(f => /\.mxl$/i.test(f)) || result.files[0];
-  return { xml: readScoreFile(mxl, fs.readFileSync(mxl)), factor };
+// ---------------------------------------------------------------------------
+// Bronnen: een stuk kan bestaan uit één PDF/foto of uit meerdere schermafbeeldingen.
+// Elke bron wordt apart herkend (op zijn eigen formaat) en daarna samengevoegd.
+const ENGINE_NAME = { audiveris: 'Audiveris', homr: 'homr' };
+const srcDir = (p, src) => path.join(pdir(p.id), `bron-${src.id}`);
+const rel = (p, f) => path.relative(pdir(p.id), f).split(path.sep).join('/');
+
+function sourcesOf(p) {
+  if (!p.sources) p.sources = p.originalFile ? [{ id: 's1', file: p.originalFile }] : [];
+  return p.sources;
 }
 
-// Herkenning 2: homr (AI, sterk in foto's en schermafbeeldingen; geen akkoorden)
-async function recognizeHomr(p, exe, progress) {
-  const dir = path.join(pdir(p.id), 'herkenning-homr');
-  const original = path.join(pdir(p.id), p.originalFile);
+// Herkenning van één bron met beide programma's
+async function recognizeSource(p, src, label, report) {
+  const aud = findAudiveris(getSettings().audiverisPath);
+  const hom = findHomr();
+  const dir = srcDir(p, src);
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
-  let images;
-  if (/\.pdf$/i.test(p.originalFile)) { progress('Pagina\'s omzetten…'); images = await rasterizePdf(original, dir); }
-  else {
-    const img = path.join(dir, 'pagina-01.png');
-    await prepareImage(original, img, { factor: 1, minWidth: 1400 });
-    images = [img];
+  const file = path.join(pdir(p.id), src.file);
+  const isPdf = /\.pdf$/i.test(src.file);
+  const step = (t) => report(`${label}${t}`);
+
+  // pagina's als afbeelding (voor homr en de stroken bij regel-voor-regel)
+  let pages = [file];
+  if (isPdf) { step('pagina\'s omzetten…'); pages = await rasterizePdf(file, path.join(dir, 'paginas')); }
+
+  // stroken rond elke notenbalk in het origineel
+  src.strips = [];
+  for (let i = 0; i < pages.length; i++) {
+    for (const s of await cropStaffStrips(pages[i], path.join(dir, `regel-p${i + 1}`))) src.strips.push(rel(p, s.file));
   }
-  const xmls = [];
-  for (let i = 0; i < images.length; i++) {
-    progress(images.length > 1 ? `homr: pagina ${i + 1} van ${images.length}` : 'homr: noten lezen');
-    xmls.push(await runHomrImage(exe, images[i]));
+
+  const results = {}, errors = {};
+  let factor = null;
+  if (aud) {
+    try {
+      const out = path.join(dir, 'audiveris');
+      let input = file, dpi = null;
+      if (!isPdf) { input = path.join(dir, 'voor-audiveris.png'); ({ factor } = await prepareImage(file, input)); }
+      let r;
+      try { r = await runOmr(aud, input, out, (t) => step(`Audiveris: ${t}`), { dpi }); }
+      catch (e) {
+        if (!e.interline) throw e;
+        const boost = TARGET_INTERLINE / e.interline;
+        step('Audiveris: opnieuw met hogere resolutie…');
+        fs.rmSync(out, { recursive: true, force: true });
+        if (!isPdf) ({ factor } = await prepareImage(file, input, { factor: (factor || 1) * boost }));
+        else dpi = Math.min(600, Math.round((pdfDpi(file) || 300) * boost));
+        r = await runOmr(aud, input, out, (t) => step(`Audiveris: ${t}`), { dpi });
+      }
+      const mxl = r.files.find(f => /\.mxl$/i.test(f)) || r.files[0];
+      const raw = readScoreFile(mxl, fs.readFileSync(mxl));
+      fs.writeFileSync(path.join(dir, 'ruw-audiveris.musicxml'), raw);
+      results.audiveris = cleanRecognized(raw).xml;
+    } catch (e) { errors.audiveris = e.message; }
   }
-  return { xml: mergePages(xmls) };
+  if (hom) {
+    try {
+      const xmls = [];
+      for (let i = 0; i < pages.length; i++) {
+        step(pages.length > 1 ? `homr: pagina ${i + 1} van ${pages.length}` : 'homr: noten lezen');
+        const img = path.join(dir, `homr-p${i + 1}.png`);
+        await prepareImage(pages[i], img);       // zelfde notengrootte, ongeacht het formaat van het knipsel
+        xmls.push(await runHomrImage(hom, img));
+      }
+      const raw = mergePages(xmls);
+      fs.writeFileSync(path.join(dir, 'ruw-homr.musicxml'), raw);
+      results.homr = cleanRecognized(raw).xml;
+    } catch (e) { errors.homr = e.message; }
+  }
+  const names = Object.keys(results);
+  if (!names.length) throw new Error(errors.audiveris || errors.homr || 'De herkenning is mislukt.');
+  const q = Object.fromEntries(names.map(n => [n, quality(results[n])]));
+  if (results.homr && results.audiveris) {
+    const t = transferHarmonies(results.audiveris, results.homr);
+    results.homr = t.xml; q.homr.chords = t.moved;
+  }
+  for (const n of names) fs.writeFileSync(path.join(dir, `herkend-${n}.musicxml`), results[n]);
+  src.engines = Object.fromEntries(['audiveris', 'homr'].map(n => [n, results[n] ? { ok: q[n].ok, measures: q[n].measures, chords: q[n].chords } : errors[n] ? { error: errors[n] } : null]).filter(([, v]) => v));
+  src.engine = names.reduce((a, b) => (q[b].score > q[a].score ? b : a));
+  src.small = !!(factor && factor > 2.5);
+  src.recognized = true;
 }
 
-const ENGINE_NAME = { audiveris: 'Audiveris', homr: 'homr' };
+// Bronnen samenvoegen tot één stuk; dubbele maten op de overgangen eruit
+function sourceXml(p, src) {
+  const want = p.engineOverride && src.engines?.[p.engineOverride] && !src.engines[p.engineOverride].error ? p.engineOverride : src.engine;
+  const f = path.join(srcDir(p, src), `herkend-${want}.musicxml`);
+  return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null;
+}
 
-async function startOmr(p) {
+function assemble(p, { appendId = null } = {}) {
+  const srcs = sourcesOf(p).filter(s => s.recognized);
+  let merged = null, lines = [], total = 0, dropped = 0;
+  let list = srcs;
+  if (appendId && p.lines && fs.existsSync(path.join(pdir(p.id), 'herkend.musicxml'))) {
+    // alleen de nieuwe bron achter het bestaande (mogelijk verbeterde) stuk plakken
+    merged = fs.readFileSync(path.join(pdir(p.id), 'herkend.musicxml'), 'utf8');
+    total = measureCount(merged);
+    lines = p.lines.slice();
+    list = srcs.filter(s => s.id === appendId);
+  }
+  for (const src of list) {
+    let xml = sourceXml(p, src);
+    if (!xml) continue;
+    const sys = systemIndexPerMeasure(xml);
+    let k = 0;
+    if (merged) { k = overlapMeasures(merged, xml); xml = dropMeasures(xml, k); dropped += k; }
+    const n = measureCount(xml);
+    // regels: waar begint elke regel van deze bron in het samengevoegde stuk?
+    let lastSys = null;
+    for (let i = 0; i < n; i++) {
+      const s = sys[i + k];
+      if (s !== lastSys) { lines.push({ start: total + i, source: src.id, strip: src.strips?.[s] || null }); lastSys = s; }
+    }
+    merged = merged ? mergePages([merged, xml], { breakType: 'new-system' }) : xml;
+    total += n;
+  }
+  return { xml: merged, lines, dropped };
+}
+
+function summarizeEngines(p) {
+  // totalen over alle bronnen, voor de melding bovenaan
+  const tot = {};
+  for (const s of sourcesOf(p)) for (const [n, e] of Object.entries(s.engines || {})) {
+    if (!e || e.error) continue;
+    tot[n] = tot[n] || { ok: 0, measures: 0, chords: 0 };
+    tot[n].ok += e.ok; tot[n].measures += e.measures; tot[n].chords += e.chords || 0;
+  }
+  p.engines = tot;
+  const used = new Set(sourcesOf(p).filter(s => s.recognized).map(s => (p.engineOverride && s.engines?.[p.engineOverride] && !s.engines[p.engineOverride].error) ? p.engineOverride : s.engine));
+  p.engine = used.size === 1 ? [...used][0] : 'mix';
+}
+
+// Herkennen: alle bronnen (opnieuw) of alleen de nog niet herkende
+async function startOmr(p, { only = null, append = false } = {}) {
   const aud = findAudiveris(getSettings().audiverisPath);
   const hom = findHomr();
   if (!aud && !hom) {
     p.status = 'needs-omr'; p.statusText = 'Notenherkenning niet gevonden. Kies de locatie van Audiveris.exe via Instellingen.';
     saveProject(p); send('project-updated', summary(p)); return;
   }
-  p.status = 'working'; p.statusText = 'Noten herkennen…'; saveProject(p); send('project-updated', summary(p));
-  const both = aud && hom;
-  const progress = (prefix) => (step) => { p.statusText = (both ? prefix : '') + step; send('project-updated', summary(p)); };
-  const results = {}, errors = {};
-  let factor = null;
-  if (aud) {
-    try {
-      const r = await recognizeAudiveris(p, aud, progress('1/2 Audiveris: '));
-      factor = r.factor;
-      fs.writeFileSync(path.join(pdir(p.id), 'herkend-ruw.musicxml'), r.xml);
-      results.audiveris = cleanRecognized(r.xml).xml;
-    } catch (e) { errors.audiveris = e.message; }
+  const srcs = sourcesOf(p);
+  const todo = only ? srcs.filter(s => s.id === only) : srcs;
+  // bij het toevoegen aan een bestaand stuk blijft het stuk zichtbaar; alleen een melding
+  const inBackground = !!only && p.status === 'ready' && fs.existsSync(path.join(pdir(p.id), 'herkend.musicxml'));
+  const report = (t) => { if (inBackground) p.busy = t; else p.statusText = t; send('project-updated', summary(p)); };
+  if (inBackground) { p.busy = 'Nieuwe afbeelding lezen…'; } else { p.status = 'working'; p.statusText = 'Noten herkennen…'; }
+  saveProject(p); send('project-updated', summary(p));
+  try {
+    for (const [i, src] of todo.entries()) {
+      const label = srcs.length > 1 ? `Afbeelding ${srcs.indexOf(src) + 1} van ${srcs.length} · ` : '';
+      try { await recognizeSource(p, src, label, report); }
+      catch (e) { src.recognized = false; src.error = e.message; if (todo.length === 1 && srcs.length === 1) throw e; }
+      saveProject(p);
+    }
+    if (!srcs.some(s => s.recognized)) throw new Error(srcs.find(s => s.error)?.error || 'De herkenning is mislukt.');
+    if (inBackground && !todo[0].recognized) {
+      p.busy = ''; p.warning = 'De nieuwe afbeelding kon niet gelezen worden: ' + (todo[0].error || 'onbekende fout');
+      saveProject(p); send('project-updated', summary(p)); return;
+    }
+    // achteraan toevoegen (verbeteringen blijven staan) als het de laatste bron is; anders opnieuw samenstellen
+    const isLast = only && srcs[srcs.length - 1].id === only;
+    const { xml, lines, dropped } = assemble(p, { appendId: append && p.edited && isLast ? only : null });
+    p.lines = lines;
+    summarizeEngines(p);
+    const failed = srcs.filter(s => !s.recognized).length;
+    p.warning = [
+      srcs.some(s => s.small && s.engine === 'audiveris') ? 'Een afbeelding was klein en is vergroot; controleer de noten extra goed.' : '',
+      dropped ? `${dropped} dubbele ${dropped === 1 ? 'maat' : 'maten'} op de overgang tussen afbeeldingen weggelaten.` : '',
+      failed ? `${failed} afbeelding${failed > 1 ? 'en' : ''} kon${failed > 1 ? 'den' : ''} niet gelezen worden (zie Bronnen).` : '',
+    ].filter(Boolean).join(' ');
+    if (!append) p.edited = false;
+    p.checked = false;
+    p.busy = '';
+    await finishScore(p, xml, { recognized: true, alreadyClean: true });
+  } catch (e) {
+    p.busy = '';
+    if (inBackground) { p.warning = 'De nieuwe afbeelding kon niet gelezen worden: ' + e.message; saveProject(p); send('project-updated', summary(p)); return; }
+    p.status = 'error'; p.statusText = e.message; saveProject(p); send('project-updated', summary(p));
   }
-  if (hom) {
-    try {
-      const r = await recognizeHomr(p, hom, progress('2/2 homr: '));
-      fs.writeFileSync(path.join(pdir(p.id), 'herkend-homr-ruw.musicxml'), r.xml);
-      results.homr = cleanRecognized(r.xml).xml;
-    } catch (e) { errors.homr = e.message; }
-  }
-  const names = Object.keys(results);
-  if (!names.length) {
-    p.status = 'error'; p.statusText = errors.audiveris || errors.homr || 'De herkenning is mislukt.';
-    saveProject(p); send('project-updated', summary(p)); return;
-  }
-  // beste kiezen
-  const q = Object.fromEntries(names.map(n => [n, quality(results[n])]));
-  const chosen = names.reduce((a, b) => (q[b].score > q[a].score ? b : a));
-  // homr gekozen? dan de akkoorden van Audiveris erbij
-  if (results.homr && results.audiveris) {
-    const t = transferHarmonies(results.audiveris, results.homr);
-    results.homr = t.xml;
-    q.homr.chords = t.moved;
-  }
-  for (const n of names) fs.writeFileSync(path.join(pdir(p.id), `herkend-${n}.musicxml`), results[n]);
-  p.engines = Object.fromEntries(['audiveris', 'homr'].map(n => [n, results[n] ? { ok: q[n].ok, measures: q[n].measures, chords: q[n].chords } : errors[n] ? { error: errors[n] } : null]).filter(([, v]) => v));
-  p.engine = chosen;
-  p.warning = '';
-  if (factor && factor > 2 && chosen === 'audiveris') p.warning = 'Deze afbeelding was klein en is vergroot om te kunnen lezen. Controleer de noten extra goed; met de originele PDF of een scherpere foto wordt het resultaat veel beter.';
-  p.edited = false;
-  await finishScore(p, results[chosen], { recognized: true, alreadyClean: true });
 }
 
 async function createFromFile(file) {
@@ -191,6 +276,7 @@ async function createFromFile(file) {
     id, title: path.basename(file, ext).replace(/[_-]+/g, ' '), composer: '', notes: '',
     createdAt: new Date().toISOString(), originalFile, sourceType: isScore ? 'musicxml' : 'pdf',
     status: 'working', statusText: 'Bestand importeren…', current: { steps: 0, semis: 0 }, versions: [],
+    sources: isScore ? [] : [{ id: 's1', file: originalFile, addedAt: new Date().toISOString() }],
   };
   saveProject(p);
   send('project-updated', summary(p));
@@ -210,6 +296,42 @@ function scoreXml(id, iv, subtitle = '') {
   const xml = transposeXml(fs.readFileSync(f, 'utf8'), iv || { steps: 0, semis: 0 });
   return withMeta(xml, { title: p?.title, composer: p?.composer, subtitle: p?.subtitle });
 }
+// Opnieuw samenvoegen zonder opnieuw te herkennen (na ordenen/verwijderen/wisselen)
+async function reassemble(p) {
+  const { xml, lines, dropped } = assemble(p);
+  if (!xml) { p.status = 'error'; p.statusText = 'Er zijn geen herkende afbeeldingen meer.'; saveProject(p); send('project-updated', summary(p)); return; }
+  p.lines = lines; summarizeEngines(p); p.edited = false;
+  p.warning = dropped ? `${dropped} dubbele ${dropped === 1 ? 'maat' : 'maten'} op de overgang tussen afbeeldingen weggelaten.` : '';
+  await finishScore(p, xml, { recognized: true, alreadyClean: true });
+}
+
+async function confirmLoseEdits(p, what) {
+  if (!p.edited) return true;
+  const r = await dialog.showMessageBox(win, { type: 'question', buttons: [what, 'Annuleren'], defaultId: 1, cancelId: 1,
+    message: 'Je verbeteringen aan de noten gaan dan verloren.', detail: 'Het stuk wordt opnieuw samengesteld uit de herkende afbeeldingen.' });
+  return r.response === 0;
+}
+
+function addSourceFile(p, file) {
+  const n = Math.max(0, ...sourcesOf(p).map(s => parseInt(String(s.id).slice(1), 10) || 0)) + 1;
+  const ext = path.extname(file).toLowerCase() || '.png';
+  const name = `bron-${String(n).padStart(2, '0')}${ext}`;
+  fs.copyFileSync(file, path.join(pdir(p.id), name));
+  const src = { id: 's' + n, file: name, addedAt: new Date().toISOString() };
+  sourcesOf(p).push(src);
+  if (p.sourceType === 'musicxml') p.sourceType = 'pdf';
+  return src;
+}
+
+// achter elkaar herkennen (bij meerdere toevoegingen tegelijk)
+const queues = new Map();
+function queueRecognition(p, srcId) {
+  const prev = queues.get(p.id) || Promise.resolve();
+  const next = prev.then(async () => { const fresh = loadProject(p.id); if (fresh) await startOmr(fresh, { only: srcId, append: true }); });
+  queues.set(p.id, next.catch(() => {}));
+  return next;
+}
+
 const metaOf = (pOrId) => { const p = typeof pOrId === 'string' ? loadProject(pOrId) : pOrId; return { title: p?.title, composer: p?.composer, subtitle: p?.subtitle }; };
 // tekst linksboven: het instrument waarvoor de partij nu geschreven is (leeg als niets gekozen)
 const labelOf = (id) => { const p = loadProject(id); return p?.toInstrument ? byId(p.toInstrument).label : ''; };
@@ -263,7 +385,8 @@ function registerIpc() {
   ipcMain.handle('project:get', (_e, id) => {
     const p = loadProject(id);
     if (!p) return null;
-    return { ...p, keyName: p.fifths !== undefined ? keyName(p.fifths, p.mode) : '', originalUrl: pathToFileURL(path.join(pdir(id), p.originalFile)).href };
+    const sources = (p.sources || []).map((s, i) => ({ ...s, n: i + 1, url: pathToFileURL(path.join(pdir(id), s.file)).href, isPdf: /\.pdf$/i.test(s.file) }));
+    return { ...p, sources, keyName: p.fifths !== undefined ? keyName(p.fifths, p.mode) : '', originalUrl: p.originalFile ? pathToFileURL(path.join(pdir(id), p.originalFile)).href : '' };
   });
 
   ipcMain.handle('project:update', (_e, id, patch) => {
@@ -290,16 +413,82 @@ function registerIpc() {
 
   ipcMain.handle('project:useEngine', async (_e, id, engine) => {
     const p = loadProject(id);
-    const f = path.join(pdir(id), `herkend-${engine}.musicxml`);
-    if (!fs.existsSync(f)) return false;
-    if (p.edited) {
-      const r = await dialog.showMessageBox(win, { type: 'question', buttons: ['Wisselen', 'Annuleren'], defaultId: 1, cancelId: 1,
-        message: `Overstappen op de herkenning van ${ENGINE_NAME[engine]}?`, detail: 'Je hebt noten verbeterd; die verbeteringen gaan dan verloren.' });
-      if (r.response !== 0) return false;
-    }
-    p.engine = engine; p.edited = false;
-    await finishScore(p, fs.readFileSync(f, 'utf8'), { recognized: true, alreadyClean: true });
+    if (!(await confirmLoseEdits(p, `Naar ${ENGINE_NAME[engine]}`))) return false;
+    p.engineOverride = engine;
+    await reassemble(p);
     return true;
+  });
+
+  // ---- bronnen (meerdere afbeeldingen in één stuk) ----
+  ipcMain.handle('source:add', async (_e, id, files) => {
+    const p = loadProject(id);
+    if (!files || !files.length) {
+      const r = await dialog.showOpenDialog(win, { title: 'Afbeelding of PDF toevoegen aan dit stuk', properties: ['openFile', 'multiSelections'],
+        filters: [{ name: 'Bladmuziek', extensions: ['pdf', 'png', 'jpg', 'jpeg', 'tif', 'tiff', 'bmp', 'gif'] }] });
+      if (r.canceled) return null;
+      files = r.filePaths;
+    }
+    const added = files.map(f => addSourceFile(p, f));
+    saveProject(p);
+    for (const s of added) queueRecognition(p, s.id);
+    return added.length;
+  });
+  ipcMain.handle('source:paste', async (_e, id) => {
+    const img = clipboard.readImage();
+    if (img.isEmpty()) return null;
+    const p = loadProject(id);
+    const tmp = path.join(os.tmpdir(), `transponeer-plak-${Date.now()}.png`);
+    fs.writeFileSync(tmp, img.toPNG());
+    const src = addSourceFile(p, tmp);
+    fs.rmSync(tmp, { force: true });
+    saveProject(p);
+    queueRecognition(p, src.id);
+    return 1;
+  });
+  ipcMain.handle('source:move', async (_e, id, srcId, dir) => {
+    const p = loadProject(id);
+    const list = sourcesOf(p); const i = list.findIndex(s => s.id === srcId); const j = i + dir;
+    if (i < 0 || j < 0 || j >= list.length) return false;
+    if (!(await confirmLoseEdits(p, 'Verplaatsen'))) return false;
+    [list[i], list[j]] = [list[j], list[i]];
+    await reassemble(p);
+    return true;
+  });
+  ipcMain.handle('source:remove', async (_e, id, srcId) => {
+    const p = loadProject(id);
+    const list = sourcesOf(p);
+    if (list.length <= 1) { await dialog.showMessageBox(win, { type: 'info', message: 'Een stuk heeft minstens één afbeelding nodig.', detail: 'Verwijder anders het hele stuk via het menu.' }); return false; }
+    const src = list.find(s => s.id === srcId);
+    const r = await dialog.showMessageBox(win, { type: 'warning', buttons: ['Verwijderen', 'Annuleren'], defaultId: 1, cancelId: 1,
+      message: 'Deze afbeelding uit het stuk halen?', detail: p.edited ? 'Je verbeteringen aan de noten gaan daarbij verloren.' : '' });
+    if (r.response !== 0) return false;
+    p.sources = list.filter(s => s.id !== srcId);
+    fs.rmSync(path.join(pdir(id), src.file), { force: true });
+    fs.rmSync(srcDir(p, src), { recursive: true, force: true });
+    await reassemble(p);
+    return true;
+  });
+  ipcMain.handle('source:retry', (_e, id, srcId) => { const p = loadProject(id); queueRecognition(p, srcId); return true; });
+
+  // regel voor regel: stukje origineel + herkende (getransponeerde) regel
+  ipcMain.handle('score:lines', async (_e, id, iv) => {
+    const p = loadProject(id);
+    const xml = tagEvents(scoreXml(id, iv));
+    let lines = p.lines;
+    if (!lines || !lines.length) {
+      let last = null; lines = [];
+      systemIndexPerMeasure(xml).forEach((sIdx, i) => { if (sIdx !== last) { lines.push({ start: i, strip: null }); last = sIdx; } });
+    }
+    const parts = splitLines(xml, lines.map(l => l.start));
+    const scale = getSettings().scale || 50;
+    const out = [];
+    for (let i = 0; i < parts.length; i++) {
+      let svg = '';
+      try { svg = await renderLine(parts[i], { scale }); } catch { svg = ''; }
+      const strip = lines[i]?.strip ? path.join(pdir(id), lines[i].strip) : null;
+      out.push({ svg, strip: strip && fs.existsSync(strip) ? pathToFileURL(strip).href : null, measure: (lines[i]?.start ?? 0) + 1 });
+    }
+    return { lines: out, label: labelOf(id) };
   });
 
   ipcMain.handle('project:retryOmr', (_e, id) => { const p = loadProject(id); if (p) startOmr(p); return true; });
@@ -425,7 +614,7 @@ function registerIpc() {
     return err || true;
   });
 
-  ipcMain.handle('original:bytes', (_e, id) => { const p = loadProject(id); return new Uint8Array(fs.readFileSync(path.join(pdir(id), p.originalFile))); });
+  ipcMain.handle('original:bytes', (_e, id, file) => { const p = loadProject(id); return new Uint8Array(fs.readFileSync(path.join(pdir(id), file || p.originalFile))); });
   ipcMain.handle('open:original', (_e, id) => { const p = loadProject(id); return shell.openPath(path.join(pdir(id), p.originalFile)); });
   ipcMain.handle('open:folder', (_e, id) => shell.openPath(id ? pdir(id) : PROJ()));
   ipcMain.handle('open:url', (_e, url) => { if (/^https:\/\//.test(url)) shell.openExternal(url); });

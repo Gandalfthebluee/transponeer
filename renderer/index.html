@@ -83,6 +83,7 @@
       <div class="seg" id="viewmode">
         <button data-mode="score" class="on" title="Alleen de getransponeerde partituur">Partituur</button>
         <button data-mode="split" title="Origineel en herkende versie naast elkaar">Naast elkaar</button>
+        <button data-mode="lines" title="Onder elk stukje origineel de herkende regel">Per regel</button>
       </div>
 
       <div class="zoom">
@@ -118,6 +119,7 @@
           <button class="ptab on" data-ptab="transpose">Transponeren</button>
           <button class="ptab" data-ptab="versions">Versies</button>
           <button class="ptab" data-ptab="notes">Notities</button>
+          <button class="ptab" data-ptab="sources">Bronnen</button>
         </div>
 
         <div class="ptab-body on" id="ptab-transpose">
@@ -181,6 +183,15 @@
             <button class="btn primary" id="btn-save-version">Bewaar</button>
           </div>
           <ul class="versions" id="versions"></ul>
+        </div>
+
+        <div class="ptab-body" id="ptab-sources">
+          <p class="hint">Een stuk kan uit meerdere afbeeldingen bestaan, bijvoorbeeld losse schermafbeeldingen van een YouTube-video. Voeg ze in de goede volgorde toe; maten die op twee afbeeldingen staan worden automatisch één keer gebruikt.</p>
+          <div class="src-actions">
+            <button class="btn primary" id="btn-src-paste" title="Schermafbeelding plakken (Ctrl+V)">Plakken</button>
+            <button class="btn" id="btn-src-file">Bestand…</button>
+          </div>
+          <ul class="sources" id="sources"></ul>
         </div>
 
         <div class="ptab-body" id="ptab-notes">
@@ -249,7 +260,8 @@
       <h2>Zo werkt het</h2>
       <ol class="help">
         <li><b>Importeer</b> een PDF, foto of MusicXML-bestand, of plak een schermafbeelding met Ctrl+V. Twee herkenningsprogramma's lezen de noten; de app kiest het beste resultaat.</li>
-        <li><b>Controleer</b> de herkenning met <i>Naast elkaar</i>. Klopt er iets niet? Kies <i>Openen in MuseScore</i>, verbeter het daar, sla op, en kies <i>Gecorrigeerde versie inladen</i>.</li>
+        <li><b>Meer afbeeldingen?</b> Plak in een geopend stuk nog een schermafbeelding (Ctrl+V); dubbele maten worden weggelaten. Ordenen doe je in het tabblad <i>Bronnen</i>.</li>
+        <li><b>Controleer</b> de herkenning met <i>Per regel</i> of <i>Naast elkaar</i>. Klopt er iets niet? Kies <i>Openen in MuseScore</i>, verbeter het daar, sla op, en kies <i>Gecorrigeerde versie inladen</i>.</li>
         <li><b>Verbeter</b> foute noten met de knop <i>Verbeteren</i>: klik een noot, dan ↑/↓, ♯ ♭ ♮, Delete voor een rust, Ctrl+Z ongedaan maken.</li>
         <li><b>Transponeer</b> met de knoppen, kies een instrument (van → naar), of typ een opdracht.</li>
         <li><b>Download</b> als PDF.</li>

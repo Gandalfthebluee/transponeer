@@ -24,7 +24,7 @@
 html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
 button { font: inherit; color: inherit; cursor: pointer; }
 input, textarea { font: inherit; color: inherit; }
-svg:not(.page svg):not(.thumb svg) { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+svg:not(.page svg):not(.thumb svg):not(.line-svg svg) { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 code { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }
 
 /* ---------- bovenbalk ---------- */
@@ -275,3 +275,32 @@ dialog label { display: block; font-weight: 600; margin: 14px 0 6px; }
 .editing .page g[id^="tp"] { cursor: pointer; }
 .editing .page g[id^="tp"]:hover { fill: #5aa7f7; color: #5aa7f7; }
 .page g.sel, .page g.sel * { fill: #e5534b !important; stroke: #e5534b; color: #e5534b; }
+
+.ptab { font-size: 12px; padding: 11px 2px; }
+.src-actions { display: flex; gap: 6px; margin-bottom: 12px; }
+.src-actions .btn { flex: 1; }
+.sources { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.sources li { display: grid; grid-template-columns: 64px 1fr auto; gap: 10px; align-items: center; padding: 8px; background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius); }
+.sources .sthumb { width: 64px; height: 46px; background: #fff center/contain no-repeat; border-radius: 3px; display: grid; place-items: center; color: #555; font-size: 11px; font-weight: 600; }
+.sources .sname { font-weight: 600; font-size: 13px; }
+.sources .smeta { font-size: 11px; color: var(--muted); line-height: 1.4; }
+.sources .smeta.err { color: #ff8f88; }
+.sources .sbtns { display: flex; flex-direction: column; gap: 2px; }
+.sources .sbtns button { width: 24px; height: 20px; background: none; border: 1px solid transparent; border-radius: 3px; color: var(--muted); font-size: 12px; padding: 0; }
+.sources .sbtns button:hover { border-color: var(--line); color: var(--text); }
+.src-block { display: flex; flex-direction: column; align-items: center; gap: 24px; width: 100%; }
+.src-block + .src-block { padding-top: 6px; border-top: 2px dashed #5b6370; }
+.banner .spinner { margin-right: 4px; }
+/* per regel */
+.canvas.lines .pane.original { display: none; }
+.lines-wrap { width: min(100%, calc(980px * var(--zoom, 1))); display: flex; flex-direction: column; gap: 18px; }
+.line { background: #fff; border-radius: 3px; box-shadow: 0 3px 14px rgba(0,0,0,.35); overflow: hidden; }
+.line-head { font: 11px/1 "Segoe UI", sans-serif; color: #6b7280; padding: 6px 10px 0; display: flex; justify-content: space-between; }
+.line .strip { display: block; width: 100%; border-bottom: 1px dashed #cbd0d8; }
+.line .nostrip { font-size: 12px; color: #8a919c; padding: 8px 10px; border-bottom: 1px dashed #cbd0d8; }
+.line-svg > svg { display: block; width: 100%; height: auto; }
+.line-svg svg { stroke: none; fill: initial; }
+.lines-label { align-self: flex-start; color: #e8ebef; font: 12px "Segoe UI", sans-serif; }
+.editing .line-svg g[id^="tp"] { cursor: pointer; }
+.editing .line-svg g[id^="tp"]:hover { fill: #5aa7f7; color: #5aa7f7; }
+.line-svg g.sel, .line-svg g.sel * { fill: #e5534b !important; stroke: #e5534b; color: #e5534b; }
