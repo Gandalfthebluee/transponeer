@@ -1,0 +1,29 @@
+# Onderhoud: een versielabel naar een andere commit laten wijzen (handmatig te starten).
+name: Tag verplaatsen
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Label, bijvoorbeeld v1.2.1'
+        required: true
+      sha:
+        description: 'Commit waar het label naar moet wijzen'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  move:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Label verplaatsen
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git tag -f "${{ inputs.tag }}" "${{ inputs.sha }}"
+          git push -f origin "refs/tags/${{ inputs.tag }}"
