@@ -14,8 +14,8 @@ Na de installatie werkt de app zichzelf bij.
 
 ## Hoe een nieuwe versie wordt uitgebracht
 1. Versienummer in `package.json` ophogen en een kopje toevoegen in `CHANGELOG.md`.
-2. Een tag `vX.Y.Z` pushen.
-3. De workflow *Release* bouwt op Windows de installer en zet hem als release online.
+2. Pushen naar `main`.
+3. De workflow *Release* ziet het nieuwe versienummer, bouwt op Windows de installer en zet hem als release online (met tag `vX.Y.Z`).
 4. Geïnstalleerde apps vinden de update vanzelf.
 
 ## Zelf bouwen

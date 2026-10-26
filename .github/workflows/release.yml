@@ -1,14 +1,20 @@
 # Bouwt de Windows-installer en zet hem online als release.
-# Start vanzelf als er een tag als v1.2.0 wordt gepusht.
+# Start vanzelf als het versienummer in package.json verandert op main.
+# Bestaat er al een release met dat nummer, dan wordt er niets gedaan.
 name: Release
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+    paths: ['package.json']
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   windows:
@@ -17,21 +23,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Versie bepalen
+        id: v
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null; then
+            echo "Versie $VERSION bestaat al; niets te doen."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/setup-node@v4
+        if: steps.v.outputs.skip != 'true'
         with:
           node-version: 22
           cache: npm
 
       - name: Onderdelen installeren
+        if: steps.v.outputs.skip != 'true'
         run: npm ci
 
       - name: Tests
+        if: steps.v.outputs.skip != 'true'
         run: npm test
 
       - name: Audiveris en taalbestanden ophalen
+        if: steps.v.outputs.skip != 'true'
         run: npm run vendor
 
       - name: Installer bouwen en publiceren
+        if: steps.v.outputs.skip != 'true'
         run: npx electron-builder --win nsis --x64 --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
