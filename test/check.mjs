@@ -6,6 +6,10 @@ import { parseCommand } from '../lib/commands.mjs';
 import { addIntervals, keyName, describeInterval } from '../lib/theory.mjs';
 import { renderPages } from '../lib/render.mjs';
 import { friendlyError, lowInterline } from '../lib/omr.mjs';
+import { cleanRecognized, editNote, listEvents, tagEvents } from '../lib/musicxml.mjs';
+import { instrumentInterval, fitOctave } from '../lib/instruments.mjs';
+import { quality, transferHarmonies, mergePages } from '../lib/engines.mjs';
+import { DOMParser } from '@xmldom/xmldom';
 
 const xml = fs.readFileSync(new URL('../samples/voorbeeld.musicxml', import.meta.url), 'utf8');
 const info = scoreInfo(xml);
@@ -41,6 +45,44 @@ check('foutmelding lage resolutie', () => {
   const log = 'With a too low interline value of 5 pixels';
   assert.equal(lowInterline(log), 5);
   assert.match(friendlyError(log), /resolutie is te laag/);
+});
+// valse bassleutel in een melodie: noten blijven op dezelfde plek, maar in de solsleutel
+const fakeClef = xml.replace('<measure number="2">', '<measure number="2"><attributes><clef><sign>F</sign><line>4</line></clef></attributes>')
+  .replace('<note><pitch><step>C</step><octave>5</octave></pitch>', '<note><pitch><step>E</step><octave>3</octave></pitch>');
+check('valse sleutel herstellen', () => {
+  const c = cleanRecognized(fakeClef);
+  assert.equal(c.report.clefs, 1);
+  assert.equal(notes(c.xml).split(' ')[4], 'C5');
+});
+check('16/16 wordt 4/4', () => {
+  const x = xml.replace('<beats>4</beats><beat-type>4</beat-type>', '<beats>16</beats><beat-type>16</beat-type>')
+    .replace('<measure number="3">', '<measure number="3"><attributes><time><beats>8</beats><beat-type>8</beat-type></time></attributes>');
+  const c = cleanRecognized(x);
+  assert.match(c.xml, /<beats>4<\/beats><beat-type>4<\/beat-type>/);
+  assert.equal((c.xml.match(/<time/g) || []).length, 1);
+});
+check('geen partijnaam of koptekst uit de herkenning', () => {
+  const c = cleanRecognized(xml);
+  assert.doesNotMatch(c.xml, /<work-title>|Zang<\/part-name>/);
+});
+check('noot verbeteren in getransponeerde weergave', () => {
+  const iv = { steps: 1, semis: 2 };          // weergave in G
+  const up = editNote(xml, 0, 'up', iv);        // G → A in weergave = F → G in origineel
+  assert.equal(notes(up).split(' ')[0], 'G4');
+  const sh = editNote(xml, 0, 'sharp', iv);     // G♯ in weergave = F♯ in origineel
+  assert.equal(notes(sh).split(' ')[0], 'F#4');
+  const r = editNote(xml, 0, 'rest');
+  assert.equal(listEvents(new DOMParser().parseFromString(r, 'text/xml'))[0].getElementsByTagName('rest').length, 1);
+  assert.equal((tagEvents(xml).match(/id="tp\d+"/g) || []).length, 10);
+});
+check('van tenorsax naar altsax', () => assert.deepEqual(instrumentInterval('tenorsax', 'altsax'), { steps: -3, semis: -5 }));
+check('octaaf passend bij bereik', () => assert.equal(fitOctave([40, 43, 45], 'altsax'), 2));
+check('kwaliteit en akkoorden overnemen', () => {
+  assert.equal(quality(xml).ok, 4);
+  const bare = xml.replace(/<harmony>[\s\S]*?<\/harmony>/g, '');
+  const t = transferHarmonies(xml, bare);
+  assert.equal(t.moved, 3);
+  assert.equal((mergePages([xml, xml]).match(/<measure /g) || []).length, 8);
 });
 await renderPages(withMeta(xml, { title: 'Test' }), { meta: { title: 'Test', composer: 'X', subtitle: 'Y' } }).then(r => {
   assert.ok(r.pages.length >= 1 && r.pages[0].includes('<svg')); n++; console.log('✓ partituur tekenen met kop');

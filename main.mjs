@@ -1,16 +1,19 @@
 // Transponeer — hoofdprogramma (Electron main process)
-import { app, BrowserWindow, ipcMain, dialog, shell, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard } from 'electron';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { randomUUID } from 'crypto';
 
-import { readScoreFile, transposeXml, scoreInfo, withMeta } from './lib/musicxml.mjs';
+import { readScoreFile, transposeXml, scoreInfo, withMeta, cleanRecognized, hasEncodedBreaks, midiNotes, editNote, tagEvents } from './lib/musicxml.mjs';
+import { INSTRUMENTS, instrumentInterval, fitOctave, byId } from './lib/instruments.mjs';
 import { renderPages } from './lib/render.mjs';
 import { findAudiveris, bundledAudiveris, runOmr, pdfDpi } from './lib/omr.mjs';
 import { prepareImage, IMAGE_EXT } from './lib/image.mjs';
 import { setupUpdates } from './lib/updates.mjs';
+import { findHomr, runHomrImage, mergePages, quality, transferHarmonies } from './lib/engines.mjs';
+import { rasterizePdf } from './lib/pdfraster.mjs';
 import { parseCommand } from './lib/commands.mjs';
 import { keyName, describeInterval, keyToTonic, transposePitchClass, tonicToFifths, intervalFromSemitones, intervalBetweenTonics, addIntervals, KEY_CHOICES } from './lib/theory.mjs';
 
@@ -52,62 +55,129 @@ function summary(p) {
 }
 
 // ---------- score verwerken ----------
-async function finishScore(p, xml) {
+async function finishScore(p, xml, { recognized = false, alreadyClean = false } = {}) {
+  if (recognized && !alreadyClean) {
+    // ruwe herkenning bewaren, opgeschoonde versie gebruiken
+    fs.writeFileSync(path.join(pdir(p.id), 'herkend-ruw.musicxml'), xml);
+    const c = cleanRecognized(xml);
+    xml = c.xml;
+  }
   fs.writeFileSync(path.join(pdir(p.id), 'herkend.musicxml'), xml);
   const info = scoreInfo(xml);
   p.fifths = info.fifths; p.mode = info.mode;
-  if (!p.titleEdited && info.title) p.title = info.title;
-  if (!p.composer && info.composer) p.composer = info.composer;
+  p.encodedBreaks = hasEncodedBreaks(xml);
+  // titel/componist alleen overnemen uit een echt MusicXML-bestand; tekstherkenning is te onbetrouwbaar
+  if (!recognized) {
+    if (!p.titleEdited && info.title) p.title = info.title;
+    if (!p.composer && info.composer) p.composer = info.composer;
+  }
   p.status = 'ready'; p.statusText = '';
   try {
-    const { pages } = await renderPages(withMeta(xml, { title: p.title, composer: p.composer }), { thumbnail: true, scale: 50, meta: { title: p.title, composer: p.composer } });
+    const { pages } = await renderPages(xml, { thumbnail: true, scale: 50, breaks: p.encodedBreaks ? 'encoded' : 'auto', meta: metaOf(p) });
     fs.writeFileSync(path.join(pdir(p.id), 'voorbeeld.svg'), pages[0]);
   } catch { /* voorbeeld is niet essentieel */ }
   saveProject(p);
   send('project-updated', summary(p));
 }
 
+// Herkenning 1: Audiveris (sterk in nette PDF's, leest ook akkoorden)
+async function recognizeAudiveris(p, exe, progress) {
+  const outDir = path.join(pdir(p.id), 'herkenning');
+  const original = path.join(pdir(p.id), p.originalFile);
+  fs.rmSync(outDir, { recursive: true, force: true });
+  let input = original, factor = null, dpi = null;
+  if (IMAGE_EXT.test(p.originalFile)) {
+    input = path.join(pdir(p.id), 'voor-herkenning.png');
+    ({ factor } = await prepareImage(original, input));
+  }
+  let result;
+  try {
+    result = await runOmr(exe, input, outDir, progress, { dpi });
+  } catch (e) {
+    // te kleine noten: één keer opnieuw met een sterkere vergroting / hogere resolutie
+    if (!e.interline) throw e;
+    const boost = 20 / e.interline;
+    progress('Audiveris: opnieuw met hogere resolutie…');
+    fs.rmSync(outDir, { recursive: true, force: true });
+    if (input !== original) ({ factor } = await prepareImage(original, input, { factor: (factor || 1) * boost }));
+    else dpi = Math.min(600, Math.round((pdfDpi(original) || 300) * boost));
+    result = await runOmr(exe, input, outDir, progress, { dpi });
+  }
+  const mxl = result.files.find(f => /\.mxl$/i.test(f)) || result.files[0];
+  return { xml: readScoreFile(mxl, fs.readFileSync(mxl)), factor };
+}
+
+// Herkenning 2: homr (AI, sterk in foto's en schermafbeeldingen; geen akkoorden)
+async function recognizeHomr(p, exe, progress) {
+  const dir = path.join(pdir(p.id), 'herkenning-homr');
+  const original = path.join(pdir(p.id), p.originalFile);
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  let images;
+  if (/\.pdf$/i.test(p.originalFile)) { progress('Pagina\'s omzetten…'); images = await rasterizePdf(original, dir); }
+  else {
+    const img = path.join(dir, 'pagina-01.png');
+    await prepareImage(original, img, { factor: 1, minWidth: 1400 });
+    images = [img];
+  }
+  const xmls = [];
+  for (let i = 0; i < images.length; i++) {
+    progress(images.length > 1 ? `homr: pagina ${i + 1} van ${images.length}` : 'homr: noten lezen');
+    xmls.push(await runHomrImage(exe, images[i]));
+  }
+  return { xml: mergePages(xmls) };
+}
+
+const ENGINE_NAME = { audiveris: 'Audiveris', homr: 'homr' };
+
 async function startOmr(p) {
-  const exe = findAudiveris(getSettings().audiverisPath);
-  if (!exe) {
+  const aud = findAudiveris(getSettings().audiverisPath);
+  const hom = findHomr();
+  if (!aud && !hom) {
     p.status = 'needs-omr'; p.statusText = 'Notenherkenning niet gevonden. Kies de locatie van Audiveris.exe via Instellingen.';
     saveProject(p); send('project-updated', summary(p)); return;
   }
-  p.status = 'working'; p.statusText = 'Noten herkennen (±15 s per pagina)…'; saveProject(p); send('project-updated', summary(p));
-  const outDir = path.join(pdir(p.id), 'herkenning');
-  const original = path.join(pdir(p.id), p.originalFile);
-  const progress = (step) => { p.statusText = step; send('project-updated', summary(p)); };
-  try {
-    fs.rmSync(outDir, { recursive: true, force: true });
-    let input = original, factor = null, dpi = null;
-    if (IMAGE_EXT.test(p.originalFile)) {
-      progress('Afbeelding voorbereiden…');
-      input = path.join(pdir(p.id), 'voor-herkenning.png');
-      ({ factor } = await prepareImage(original, input));
-    }
-    let result;
+  p.status = 'working'; p.statusText = 'Noten herkennen…'; saveProject(p); send('project-updated', summary(p));
+  const both = aud && hom;
+  const progress = (prefix) => (step) => { p.statusText = (both ? prefix : '') + step; send('project-updated', summary(p)); };
+  const results = {}, errors = {};
+  let factor = null;
+  if (aud) {
     try {
-      result = await runOmr(exe, input, outDir, progress, { dpi });
-    } catch (e) {
-      // te kleine noten: één keer opnieuw met een sterkere vergroting / hogere resolutie
-      if (!e.interline) throw e;
-      const boost = 20 / e.interline;
-      progress('Opnieuw proberen met hogere resolutie…');
-      fs.rmSync(outDir, { recursive: true, force: true });
-      if (input !== original) ({ factor } = await prepareImage(original, input, { factor: (factor || 1) * boost }));
-      else dpi = Math.min(600, Math.round((pdfDpi(original) || 300) * boost));
-      result = await runOmr(exe, input, outDir, progress, { dpi });
-    }
-    const files = result.files;
-    const mxl = files.find(f => /\.mxl$/i.test(f)) || files[0];
-    const xml = readScoreFile(mxl, fs.readFileSync(mxl));
-    p.warning = '';
-    if (factor && factor > 2) p.warning = 'Deze afbeelding was klein en is vergroot om te kunnen lezen. Controleer de noten extra goed met "Naast elkaar"; met de originele PDF of een scherpere foto wordt het resultaat veel beter.';
-    else if (files.length > 1) p.warning = `Audiveris vond ${files.length} delen; alleen het eerste deel is geladen.`;
-    await finishScore(p, xml);
-  } catch (e) {
-    p.status = 'error'; p.statusText = e.message; saveProject(p); send('project-updated', summary(p));
+      const r = await recognizeAudiveris(p, aud, progress('1/2 Audiveris: '));
+      factor = r.factor;
+      fs.writeFileSync(path.join(pdir(p.id), 'herkend-ruw.musicxml'), r.xml);
+      results.audiveris = cleanRecognized(r.xml).xml;
+    } catch (e) { errors.audiveris = e.message; }
   }
+  if (hom) {
+    try {
+      const r = await recognizeHomr(p, hom, progress('2/2 homr: '));
+      fs.writeFileSync(path.join(pdir(p.id), 'herkend-homr-ruw.musicxml'), r.xml);
+      results.homr = cleanRecognized(r.xml).xml;
+    } catch (e) { errors.homr = e.message; }
+  }
+  const names = Object.keys(results);
+  if (!names.length) {
+    p.status = 'error'; p.statusText = errors.audiveris || errors.homr || 'De herkenning is mislukt.';
+    saveProject(p); send('project-updated', summary(p)); return;
+  }
+  // beste kiezen
+  const q = Object.fromEntries(names.map(n => [n, quality(results[n])]));
+  const chosen = names.reduce((a, b) => (q[b].score > q[a].score ? b : a));
+  // homr gekozen? dan de akkoorden van Audiveris erbij
+  if (results.homr && results.audiveris) {
+    const t = transferHarmonies(results.audiveris, results.homr);
+    results.homr = t.xml;
+    q.homr.chords = t.moved;
+  }
+  for (const n of names) fs.writeFileSync(path.join(pdir(p.id), `herkend-${n}.musicxml`), results[n]);
+  p.engines = Object.fromEntries(['audiveris', 'homr'].map(n => [n, results[n] ? { ok: q[n].ok, measures: q[n].measures, chords: q[n].chords } : errors[n] ? { error: errors[n] } : null]).filter(([, v]) => v));
+  p.engine = chosen;
+  p.warning = '';
+  if (factor && factor > 2 && chosen === 'audiveris') p.warning = 'Deze afbeelding was klein en is vergroot om te kunnen lezen. Controleer de noten extra goed; met de originele PDF of een scherpere foto wordt het resultaat veel beter.';
+  p.edited = false;
+  await finishScore(p, results[chosen], { recognized: true, alreadyClean: true });
 }
 
 async function createFromFile(file) {
@@ -138,9 +208,12 @@ function scoreXml(id, iv, subtitle = '') {
   if (!fs.existsSync(f)) throw new Error('Deze partituur is nog niet herkend.');
   const p = loadProject(id);
   const xml = transposeXml(fs.readFileSync(f, 'utf8'), iv || { steps: 0, semis: 0 });
-  return withMeta(xml, { title: p?.title, composer: p?.composer, subtitle });
+  return withMeta(xml, { title: p?.title, composer: p?.composer, subtitle: p?.subtitle });
 }
-const metaOf = (id, subtitle = '') => { const p = loadProject(id); return { title: p?.title, composer: p?.composer, subtitle }; };
+const metaOf = (pOrId) => { const p = typeof pOrId === 'string' ? loadProject(pOrId) : pOrId; return { title: p?.title, composer: p?.composer, subtitle: p?.subtitle }; };
+// tekst linksboven: het instrument waarvoor de partij nu geschreven is (leeg als niets gekozen)
+const labelOf = (id) => { const p = loadProject(id); return p?.toInstrument ? byId(p.toInstrument).label : ''; };
+const breaksOf = (id) => (loadProject(id)?.encodedBreaks ? 'encoded' : 'auto');
 
 const safeName = (s) => (s || 'partituur').replace(/[\\/:*?"<>|]+/g, '').trim() || 'partituur';
 
@@ -171,6 +244,22 @@ function registerIpc() {
     return out;
   });
 
+  // schermafbeelding uit het klembord plakken (bijvoorbeeld van YouTube)
+  ipcMain.handle('projects:paste', async () => {
+    ensureDirs();
+    const img = clipboard.readImage();
+    if (img.isEmpty()) {
+      const files = clipboard.readBuffer('FileNameW').toString('ucs2').replace(/\0/g, '').trim();
+      if (files && fs.existsSync(files)) return [await createFromFile(files)];
+      return null;
+    }
+    const d = new Date();
+    const name = `Geplakt ${d.toLocaleDateString('nl-NL')} ${d.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' }).replace(':', '.')}.png`;
+    const tmp = path.join(os.tmpdir(), name.replace(/[\\/:*?"<>|]/g, '-'));
+    fs.writeFileSync(tmp, img.toPNG());
+    try { return [await createFromFile(tmp)]; } finally { fs.rmSync(tmp, { force: true }); }
+  });
+
   ipcMain.handle('project:get', (_e, id) => {
     const p = loadProject(id);
     if (!p) return null;
@@ -199,6 +288,20 @@ function registerIpc() {
     return true;
   });
 
+  ipcMain.handle('project:useEngine', async (_e, id, engine) => {
+    const p = loadProject(id);
+    const f = path.join(pdir(id), `herkend-${engine}.musicxml`);
+    if (!fs.existsSync(f)) return false;
+    if (p.edited) {
+      const r = await dialog.showMessageBox(win, { type: 'question', buttons: ['Wisselen', 'Annuleren'], defaultId: 1, cancelId: 1,
+        message: `Overstappen op de herkenning van ${ENGINE_NAME[engine]}?`, detail: 'Je hebt noten verbeterd; die verbeteringen gaan dan verloren.' });
+      if (r.response !== 0) return false;
+    }
+    p.engine = engine; p.edited = false;
+    await finishScore(p, fs.readFileSync(f, 'utf8'), { recognized: true, alreadyClean: true });
+    return true;
+  });
+
   ipcMain.handle('project:retryOmr', (_e, id) => { const p = loadProject(id); if (p) startOmr(p); return true; });
 
   ipcMain.handle('project:replaceScore', async (_e, id) => {
@@ -216,12 +319,49 @@ function registerIpc() {
 
   ipcMain.handle('score:render', async (_e, id, iv) => {
     const p = loadProject(id);
-    const xml = scoreXml(id, iv);
-    const { pages } = await renderPages(xml, { scale: getSettings().scale || 50, meta: metaOf(id) });
-    return { pages, keyName: currentKeyName(p, iv), description: describeInterval(iv || { steps: 0, semis: 0 }) };
+    const xml = tagEvents(scoreXml(id, iv));
+    const { pages } = await renderPages(xml, { scale: getSettings().scale || 50, meta: metaOf(id), breaks: breaksOf(id) });
+    return { pages, label: labelOf(id), keyName: currentKeyName(p, iv), description: describeInterval(iv || { steps: 0, semis: 0 }) };
+  });
+
+  // noten verbeteren, met ongedaan maken
+  const history = new Map();
+  ipcMain.handle('score:edit', (_e, id, iv, index, action) => {
+    const f = path.join(pdir(id), 'herkend.musicxml');
+    const before = fs.readFileSync(f, 'utf8');
+    const after = editNote(before, index, action, iv || { steps: 0, semis: 0 });
+    const h = history.get(id) || []; h.push(before); if (h.length > 100) h.shift(); history.set(id, h);
+    fs.writeFileSync(f, after);
+    const p = loadProject(id); p.edited = true; saveProject(p);
+    return { undo: h.length };
+  });
+  ipcMain.handle('score:undo', (_e, id) => {
+    const h = history.get(id) || [];
+    if (!h.length) return { undo: 0, done: false };
+    fs.writeFileSync(path.join(pdir(id), 'herkend.musicxml'), h.pop());
+    return { undo: h.length, done: true };
+  });
+  ipcMain.handle('score:thumb', async (_e, id) => {
+    const p = loadProject(id);
+    const xml = fs.readFileSync(path.join(pdir(id), 'herkend.musicxml'), 'utf8');
+    const { pages } = await renderPages(xml, { thumbnail: true, scale: 50, breaks: breaksOf(id), meta: metaOf(p) });
+    fs.writeFileSync(path.join(pdir(id), 'voorbeeld.svg'), pages[0]);
+    send('project-updated', summary(p));
   });
 
   ipcMain.handle('theory:keys', () => KEY_CHOICES);
+  ipcMain.handle('instruments:list', () => INSTRUMENTS.map(({ id, name }) => ({ id, name })));
+  // van instrument → naar instrument, met octaaf passend bij het bereik
+  ipcMain.handle('instruments:interval', (_e, id, fromId, toId, fit = true) => {
+    let iv = instrumentInterval(fromId, toId);
+    let octave = 0;
+    if (fit) {
+      const f = path.join(pdir(id), 'herkend.musicxml');
+      if (fs.existsSync(f)) octave = fitOctave(midiNotes(transposeXml(fs.readFileSync(f, 'utf8'), iv)), toId);
+      iv = { steps: iv.steps + 7 * octave, semis: iv.semis + 12 * octave };
+    }
+    return { interval: iv, octave };
+  });
 
   ipcMain.handle('theory:interval', (_e, kind, id, arg) => {
     const p = loadProject(id);
@@ -249,12 +389,14 @@ function registerIpc() {
     const suggested = `${safeName(p.title)}${label ? ' - ' + safeName(label) : ''}.pdf`;
     const r = await dialog.showSaveDialog(win, { title: 'PDF opslaan', defaultPath: path.join(app.getPath('documents'), suggested), filters: [{ name: 'PDF', extensions: ['pdf'] }] });
     if (r.canceled) return null;
-    const { pages } = await renderPages(scoreXml(id, iv, label), { scale: getSettings().scale || 50, meta: metaOf(id, label) });
+    const { pages } = await renderPages(scoreXml(id, iv), { scale: getSettings().scale || 50, meta: metaOf(id), breaks: breaksOf(id) });
+    const lbl = labelOf(id);
     const html = `<!doctype html><html><head><meta charset="utf-8"><style>
       @page { size: A4; margin: 0 } html,body { margin:0; padding:0; background:#fff }
       .page { width:210mm; height:297mm; page-break-after: always; overflow:hidden }
       .page:last-child { page-break-after: auto } svg { width:210mm; height:297mm; display:block }
-    </style></head><body>${pages.map(s => `<div class="page">${s}</div>`).join('')}</body></html>`;
+      .page { position: relative } .label { position:absolute; left:12mm; top:9mm; font: 11pt 'Times New Roman', serif; }
+    </style></head><body>${pages.map((s, i) => `<div class="page">${i === 0 && lbl ? `<div class="label">${lbl.replace(/[&<>]/g, '')}</div>` : ''}${s}</div>`).join('')}</body></html>`;
     const tmp = path.join(os.tmpdir(), `transponeer-${Date.now()}.html`);
     fs.writeFileSync(tmp, html);
     const pw = new BrowserWindow({ show: false, webPreferences: { offscreen: true } });

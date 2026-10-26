@@ -25,6 +25,12 @@ origineel, de herkende noten en je notities).
   Herkenning is nooit 100% foutloos, vooral bij scans van slechte kwaliteit.
   Fout gevonden? Menu `•••` → *Openen in MuseScore*, verbeter, sla op als MusicXML,
   en kies *Gecorrigeerde versie inladen…*.
+- **Plakken**: maak een schermafbeelding (Windows-toets + Shift + S, bijvoorbeeld van YouTube) en druk in het startscherm op Ctrl+V.
+- **Twee herkenningsprogramma's**: Audiveris (sterk in nette PDF's, leest akkoorden) en homr (AI, sterk in foto's).
+  De app kiest het beste resultaat; bovenaan kun je de andere versie bekijken.
+- **Noten verbeteren**: knop *Verbeteren* (of toets E). Klik een noot aan; ↑/↓ toonhoogte, Shift+↑/↓ octaaf,
+  # ♯, B ♭, N ♮, Delete = rust, ←/→ volgende noot, Ctrl+Z ongedaan maken, Esc klaar.
+- **Instrument**: kies *Van* (waarvoor het blad geschreven is) en *Naar* (waarvoor je het wilt). Het instrument komt linksboven op het blad.
 - **Transponeren**: met de knoppen links, of typ in de balk bovenin, bijvoorbeeld:
   `3 halve tonen omhoog` · `2 halve tonen omlaag` · `een hele toon omhoog` ·
   `van F naar G` · `naar Bes` · `kleine terts omlaag` · `octaaf omhoog` ·

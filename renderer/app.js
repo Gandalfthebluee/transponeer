@@ -113,6 +113,18 @@ async function importFiles(files) {
   else toast(`${created.length} bestanden geïmporteerd`, 'ok');
 }
 $('#btn-import').onclick = () => importFiles();
+async function pasteImage() {
+  const r = await api.paste();
+  if (!r) return toast('Er staat geen afbeelding op het klembord. Maak eerst een schermafbeelding (Windows-toets + Shift + S).', 'err');
+  await loadProjects();
+  openProject(r[0].id);
+}
+$('#btn-paste').onclick = pasteImage;
+document.addEventListener('paste', (e) => {
+  if (!$('#view-home').classList.contains('active')) return;
+  if (/INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+  e.preventDefault(); pasteImage();
+});
 $('#search').oninput = drawGrid;
 $('#side-folder').onclick = () => api.openFolder();
 $('#side-help').onclick = () => $('#dlg-help').showModal();
@@ -141,9 +153,14 @@ async function openProject(id) {
   $('#tab-editor').disabled = false;
   $('#title-input').value = p.title || '';
   $('#composer-input').value = p.composer || '';
+  $('#subtitle-input').value = p.subtitle || '';
+  $('#instr-from').value = p.fromInstrument || 'c';
+  $('#instr-to').value = p.toInstrument || 'c';
+  $('#instr-hint').textContent = '';
   $('#notes').value = p.notes || '';
   $('#notes-saved').textContent = '';
   $('#command-msg').textContent = '';
+  setEditing(false); state.undo = 0;
   showView('editor');
   drawOriginal();
   drawKeys();
@@ -157,17 +174,28 @@ function drawScoreState() {
   const banner = $('#banner');
   banner.className = 'banner';
   if (p.status === 'ready') {
-    if (p.warning) {
-      banner.className = 'banner show';
-      banner.innerHTML = `${esc(p.warning)} <button class="btn" id="b-split">Naast elkaar</button>`;
-      $('#b-split').onclick = () => setMode('split');
+    const E = { audiveris: 'Audiveris', homr: 'homr' };
+    const eng = p.engines || {};
+    const other = Object.keys(eng).find(n => n !== p.engine && eng[n] && !eng[n].error);
+    const cur = eng[p.engine];
+    let text = '';
+    if (cur && !cur.error) {
+      text = `Herkend met ${E[p.engine]}: ${cur.ok} van ${cur.measures} maten kloppen precies.`;
+      if (other) text += ` (${E[other]}: ${eng[other].ok} van ${eng[other].measures}.)`;
+      if (p.engine === 'homr' && cur.chords) text += ` Akkoorden van Audiveris overgenomen.`;
     }
-    else if (p.sourceType === 'pdf' && !p.checked) {
-      banner.className = 'banner show';
-      banner.innerHTML = `Controleer de herkende noten met het origineel. Herkenning is nooit 100% foutloos.
-        <button class="btn" id="b-split">Naast elkaar</button><button class="btn ghost" id="b-ok">Klopt</button>`;
-      $('#b-split').onclick = () => setMode('split');
-      $('#b-ok').onclick = async () => { p.checked = true; await api.updateProject(p.id, { checked: true }); banner.className = 'banner'; };
+    if (p.warning) text = (text ? text + ' ' : '') + p.warning;
+    if (p.sourceType === 'pdf' || p.engines) {
+      if (!p.checked || p.warning) {
+        banner.className = 'banner show';
+        banner.innerHTML = `<span>${esc(text || 'Controleer de herkende noten met het origineel. Herkenning is nooit 100% foutloos.')}</span>
+          ${other ? `<button class="btn" id="b-other">Toon versie van ${E[other]}</button>` : ''}
+          <button class="btn" id="b-split">Naast elkaar</button><button class="btn" id="b-fix">Verbeteren</button><button class="btn ghost" id="b-ok">Klopt</button>`;
+        $('#b-split').onclick = () => setMode('split');
+        $('#b-fix').onclick = () => setEditing(true);
+        $('#b-ok').onclick = async () => { p.checked = true; p.warning = ''; await api.updateProject(p.id, { checked: true, warning: '' }); banner.className = 'banner'; };
+        if (other) $('#b-other').onclick = async () => { if (await api.useEngine(p.id, other)) { toast(`Nu de versie van ${E[other]}`, 'ok'); openProject(p.id); } };
+      }
     }
     render();
     return;
@@ -209,8 +237,9 @@ async function render() {
     if (token !== state.renderToken) return;
     const pane = $('#pane-score');
     const scrollTop = pane.scrollTop;
-    pane.innerHTML = r.pages.map((svg, i) => `<div class="page" title="Pagina ${i + 1}">${svg}</div>`).join('');
+    pane.innerHTML = r.pages.map((svg, i) => `<div class="page" title="Pagina ${i + 1}">${i === 0 && r.label ? `<div class="page-label">${esc(r.label)}</div>` : ''}${svg}</div>`).join('');
     pane.scrollTop = scrollTop;
+    if (state.editing) markSelection();
     $('#key-now').textContent = r.keyName || '–';
     $('#interval-desc').textContent = r.description;
     $('#statusbar').innerHTML = `<span>${r.pages.length} pagina${r.pages.length > 1 ? "'s" : ''}</span><span>Toonsoort: ${esc(r.keyName)}</span><span>${esc(r.description)}</span><span>Zoom ${Math.round(state.zoom * 100)}%</span>`;
@@ -227,7 +256,6 @@ function updatePanel() {
   const p = state.project;
   $('#key-original').textContent = p.keyName || '–';
   $('#semi-value').textContent = (state.iv.semis > 0 ? '+' : state.iv.semis < 0 ? '−' : '') + Math.abs(state.iv.semis);
-  $$('#instr button').forEach(b => b.classList.toggle('on', state.instrument === b.dataset.semis && +b.dataset.steps === state.iv.steps && +b.dataset.semis === state.iv.semis));
   const now = $('#key-now').textContent.split(' ')[0].toLowerCase();
   $$('#keys button').forEach(b => b.classList.toggle('on', b.dataset.name.toLowerCase() === now && !sameIv(state.iv, { steps: 0, semis: 0 })));
   $$('#versions li').forEach(li => li.classList.toggle('on', li.dataset.id === state.activeVersion));
@@ -272,8 +300,31 @@ $('#semi-up').onclick = async () => setInterval_(await api.interval('semitones',
 $('#semi-down').onclick = async () => setInterval_(await api.interval('semitones', state.project.id, { semis: state.iv.semis - 1, pref: state.pref }));
 $('#oct-up').onclick = () => setInterval_({ steps: state.iv.steps + 7, semis: state.iv.semis + 12 });
 $('#oct-down').onclick = () => setInterval_({ steps: state.iv.steps - 7, semis: state.iv.semis - 12 });
-$('#btn-reset').onclick = () => setInterval_({ steps: 0, semis: 0 }, 'Terug naar het origineel');
-$$('#instr button').forEach(b => b.onclick = () => (state.instrument = b.dataset.semis, setInterval_({ steps: +b.dataset.steps, semis: +b.dataset.semis }, b.dataset.semis === '0' ? 'Concert-toonhoogte' : `Partij voor ${b.firstChild.textContent}-instrument`)));
+$('#btn-reset').onclick = async () => {
+  state.project.toInstrument = '';
+  $('#instr-to').value = $('#instr-from').value;
+  $('#instr-hint').textContent = '';
+  await api.updateProject(state.project.id, { toInstrument: '' });
+  setInterval_({ steps: 0, semis: 0 }, 'Terug naar het origineel');
+};
+// van instrument → naar instrument
+(async () => {
+  const list = await api.instruments();
+  const opts = list.map(i => `<option value="${i.id}">${esc(i.name)}</option>`).join('');
+  $('#instr-from').innerHTML = opts; $('#instr-to').innerHTML = opts;
+})();
+async function applyInstruments() {
+  const from = $('#instr-from').value, to = $('#instr-to').value;
+  state.project.fromInstrument = from; state.project.toInstrument = to === 'c' && from === 'c' ? '' : to;
+  await api.updateProject(state.project.id, { fromInstrument: from, toInstrument: state.project.toInstrument });
+  const r = await api.instrumentInterval(state.project.id, from, to, $('#instr-fit').checked);
+  const names = (id) => $(`#instr-from option[value="${id}"]`).textContent;
+  $('#instr-hint').textContent = r.octave ? `Een octaaf ${r.octave > 0 ? 'hoger' : 'lager'} gezet, zodat het in het bereik van de ${names(to).toLowerCase()} past.` : '';
+  setInterval_(r.interval, from === to ? 'Zelfde instrument' : `Van ${names(from)} naar ${names(to)}`);
+}
+$('#instr-from').onchange = applyInstruments;
+$('#instr-to').onchange = applyInstruments;
+$('#instr-fit').onchange = applyInstruments;
 segmented('#key-dir', 'dir', (v) => state.keyDir = v);
 segmented('#pref', 'pref', async (v) => {
   state.pref = v;
@@ -324,6 +375,12 @@ $('#composer-input').addEventListener('change', async (e) => {
   await api.updateProject(state.project.id, { composer: state.project.composer });
   render();
 });
+$('#subtitle-input').addEventListener('change', async (e) => {
+  state.project.subtitle = e.target.value.trim();
+  await api.updateProject(state.project.id, { subtitle: state.project.subtitle });
+  render();
+});
+$('#subtitle-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.target.blur(); });
 $('#composer-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.target.blur(); });
 $('#title-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.target.blur(); });
 let notesTimer;
@@ -369,6 +426,74 @@ async function saveVersion() {
 $('#btn-save-version').onclick = saveVersion;
 $('#version-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') saveVersion(); });
 
+// ---------- noten verbeteren ----------
+state.editing = false; state.sel = null; state.undo = 0;
+function setEditing(on) {
+  if (on && state.project?.status !== 'ready') return toast('Er is nog geen herkende partituur.', 'err');
+  const was = state.editing;
+  state.editing = on; state.sel = null;
+  $('#btn-edit').classList.toggle('on', on);
+  $('#editbar').classList.toggle('show', on);
+  $('#pane-score').classList.toggle('editing', on);
+  if (on) { setMode('split'); updateEditBar(); }
+  else { $$('.page g.sel').forEach(g => g.classList.remove('sel')); if (was) api.refreshThumb(state.project.id); }
+}
+function selectedEl() { return state.sel === null ? null : $(`#pane-score g[id="tp${state.sel}"]`); }
+function markSelection() {
+  $$('#pane-score g.sel').forEach(g => g.classList.remove('sel'));
+  const g = selectedEl(); if (g) g.classList.add('sel');
+  updateEditBar();
+}
+function updateEditBar() {
+  const g = selectedEl();
+  const isRest = g && /rest/i.test(g.getAttribute('class') || '');
+  const isMRest = g && /mRest/.test(g.getAttribute('class') || '');
+  $('#edit-hint').textContent = !g ? 'Klik op een noot of rust' : isRest ? 'Rust geselecteerd' : 'Noot geselecteerd · ←/→ volgende';
+  $$('#editbar [data-ed]').forEach(b => {
+    const a = b.dataset.ed;
+    if (a === 'done') return;
+    if (a === 'undo') { b.disabled = !state.undo; return; }
+    b.disabled = !g || (isRest ? (a !== 'note' || isMRest) : a === 'note');
+  });
+}
+async function doEdit(action) {
+  if (action === 'done') return setEditing(false);
+  if (action === 'undo') {
+    const r = await api.undoEdit(state.project.id); state.undo = r.undo; await render(); return;
+  }
+  if (state.sel === null) return;
+  const act = action === 'note' ? 'note' : action;
+  try {
+    const r = await api.editNote(state.project.id, state.iv, state.sel, act === 'note' ? 'up' : act);
+    state.undo = r.undo;
+    await render();
+  } catch (e) { toast('Bewerken lukte niet: ' + e.message, 'err'); }
+}
+$('#btn-edit').onclick = () => setEditing(!state.editing);
+$$('#editbar [data-ed]').forEach(b => b.onclick = () => doEdit(b.dataset.ed));
+$('#pane-score').addEventListener('click', (e) => {
+  if (!state.editing) return;
+  const g = e.target.closest('g[id^="tp"]');
+  if (!g) return;
+  state.sel = parseInt(g.id.slice(2), 10);
+  markSelection();
+});
+function editKeys(e) {
+  const k = e.key;
+  if (k === 'Escape') { setEditing(false); return true; }
+  if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === 'z') { doEdit('undo'); return true; }
+  if (state.sel === null) return false;
+  const total = $$('#pane-score g[id^="tp"]').length;
+  if (k === 'ArrowRight') { state.sel = Math.min(state.sel + 1, total - 1); markSelection(); selectedEl()?.scrollIntoView({ block: 'nearest' }); return true; }
+  if (k === 'ArrowLeft') { state.sel = Math.max(state.sel - 1, 0); markSelection(); selectedEl()?.scrollIntoView({ block: 'nearest' }); return true; }
+  const isRest = /rest/i.test(selectedEl()?.getAttribute('class') || '');
+  if (isRest) { if (k === 'Enter') { doEdit('note'); return true; } return false; }
+  const map = { ArrowUp: e.shiftKey ? 'octUp' : 'up', ArrowDown: e.shiftKey ? 'octDown' : 'down', '#': 'sharp', '+': 'sharp', b: 'flat', '-': 'flat', n: 'natural', Delete: 'rest', Backspace: 'rest' };
+  const a = map[k];
+  if (a) { doEdit(a); return true; }
+  return false;
+}
+
 // ---------- opdrachtregel ----------
 const cmd = $('#command');
 let hl = -1;
@@ -394,6 +519,7 @@ async function runCommand() {
   if (!state.project || state.project.status !== 'ready') return flashCommand('Er is nog geen herkende partituur.', false);
   const r = await api.parseCommand(state.project.id, text);
   if (r.type === 'error') return flashCommand(r.message, false);
+  if (r.instrument) { cmd.value = ''; $('#instr-to').value = r.instrument; return applyInstruments(); }
   const iv = r.type === 'add' ? { steps: state.iv.steps + r.interval.steps, semis: state.iv.semis + r.interval.semis } : r.interval;
   cmd.value = '';
   setInterval_(iv, r.message);
@@ -481,7 +607,9 @@ $('#scale').onchange = async (e) => { await api.setSettings({ scale: +e.target.v
 // ---------- sneltoetsen ----------
 document.addEventListener('keydown', (e) => {
   if (!$('#view-editor').classList.contains('active')) return;
-  const typing = /INPUT|TEXTAREA/.test(document.activeElement.tagName);
+  const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+  if (state.editing && !typing) { if (editKeys(e)) { e.preventDefault(); return; } }
+  if (!typing && !e.ctrlKey && e.key.toLowerCase() === 'e') { e.preventDefault(); setEditing(!state.editing); return; }
   if (e.ctrlKey && e.key.toLowerCase() === 'k') { e.preventDefault(); cmd.focus(); }
   else if (e.ctrlKey && (e.key === '=' || e.key === '+')) { e.preventDefault(); setZoom(state.zoom + 0.1); }
   else if (e.ctrlKey && e.key === '-') { e.preventDefault(); setZoom(state.zoom - 0.1); }

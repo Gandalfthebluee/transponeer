@@ -52,6 +52,36 @@ jobs:
         if: steps.v.outputs.skip != 'true'
         run: npm run vendor
 
+      - name: homr klaarzetten (cache)
+        if: steps.v.outputs.skip != 'true'
+        id: homrcache
+        uses: actions/cache@v4
+        with:
+          path: vendor/homr
+          key: homr-0.7.0-win-py312-v1
+
+      - uses: actions/setup-python@v5
+        if: steps.v.outputs.skip != 'true' && steps.homrcache.outputs.cache-hit != 'true'
+        with:
+          python-version: '3.12'
+
+      - name: homr bouwen (tweede herkenning)
+        if: steps.v.outputs.skip != 'true' && steps.homrcache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install homr==0.7.0 pyinstaller
+          homr --init
+          pyinstaller --noconfirm --onedir --name homr --collect-all homr --collect-all rapidocr --collect-all onnxruntime --collect-all musicxml --log-level WARN scripts/homr_cli.py
+          rm -rf vendor/homr && mkdir -p vendor && mv dist/homr vendor/homr
+          rm -rf dist build homr.spec
+          ls vendor/homr | head
+
+      - name: homr testen
+        if: steps.v.outputs.skip != 'true'
+        shell: bash
+        run: vendor/homr/homr.exe --help | head -3
+
       - name: Installer bouwen
         if: steps.v.outputs.skip != 'true'
         shell: bash

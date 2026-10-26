@@ -49,6 +49,9 @@
             <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
             <input id="search" placeholder="Zoeken">
           </div>
+          <button class="btn" id="btn-paste" title="Schermafbeelding plakken (Ctrl+V)">
+            <svg viewBox="0 0 24 24"><path d="M9 4h6v3H9zM7 6H5v15h14V6h-2"/></svg> Plakken
+          </button>
           <button class="btn primary" id="btn-import">
             <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> Importeren
           </button>
@@ -65,7 +68,7 @@
       <button class="icon-btn" id="btn-back" title="Terug naar overzicht">
         <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
       </button>
-      <div class="titles"><input class="title-input" id="title-input" spellcheck="false" placeholder="Titel"><input class="composer-input" id="composer-input" spellcheck="false" placeholder="Componist"></div>
+      <div class="titles"><input class="title-input" id="title-input" spellcheck="false" placeholder="Titel"><input class="composer-input" id="subtitle-input" spellcheck="false" placeholder="Ondertitel"><input class="composer-input" id="composer-input" spellcheck="false" placeholder="Componist"></div>
 
       <div class="command">
         <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
@@ -74,6 +77,9 @@
         <div class="suggest" id="suggest"></div>
       </div>
 
+      <button class="btn" id="btn-edit" title="Noten verbeteren (E)">
+        <svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4zM13 7l4 4"/></svg> Verbeteren
+      </button>
       <div class="seg" id="viewmode">
         <button data-mode="score" class="on" title="Alleen de getransponeerde partituur">Partituur</button>
         <button data-mode="split" title="Origineel en herkende versie naast elkaar">Naast elkaar</button>
@@ -146,13 +152,14 @@
           </section>
 
           <section class="pgroup">
-            <h3>Voor instrument</h3>
-            <div class="instr" id="instr">
-              <button data-steps="0" data-semis="0">C<small>concert</small></button>
-              <button data-steps="1" data-semis="2">B♭<small>klarinet, trompet</small></button>
-              <button data-steps="5" data-semis="9">E♭<small>altsax</small></button>
-              <button data-steps="4" data-semis="7">F<small>hoorn</small></button>
+            <h3>Instrument</h3>
+            <div class="instr-pick">
+              <label>Van<select id="instr-from"></select></label>
+              <svg viewBox="0 0 24 24" class="arrow"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+              <label>Naar<select id="instr-to"></select></label>
             </div>
+            <label class="check"><input type="checkbox" id="instr-fit" checked> Octaaf aanpassen aan het bereik</label>
+            <div class="hint" id="instr-hint"></div>
           </section>
 
           <section class="pgroup">
@@ -184,6 +191,25 @@
 
       <section class="canvas-wrap">
         <div class="banner" id="banner"></div>
+        <div class="editbar" id="editbar">
+          <span class="edit-hint" id="edit-hint">Klik op een noot of rust</span>
+          <div class="edit-tools">
+            <button data-ed="up" title="Toon omhoog (↑)">↑</button>
+            <button data-ed="down" title="Toon omlaag (↓)">↓</button>
+            <button data-ed="octUp" title="Octaaf omhoog (Shift+↑)">8va</button>
+            <button data-ed="octDown" title="Octaaf omlaag (Shift+↓)">8vb</button>
+            <span class="sep"></span>
+            <button data-ed="sharp" title="Kruis (#)">♯</button>
+            <button data-ed="flat" title="Mol (B)">♭</button>
+            <button data-ed="natural" title="Herstellingsteken (N)">♮</button>
+            <span class="sep"></span>
+            <button data-ed="rest" title="Maak er een rust van (Delete)">Rust</button>
+            <button data-ed="note" title="Maak van de rust een noot (Enter)">Noot</button>
+            <span class="sep"></span>
+            <button data-ed="undo" title="Ongedaan maken (Ctrl+Z)">↶ Ongedaan</button>
+            <button data-ed="done" class="primary" title="Klaar (Esc)">Klaar</button>
+          </div>
+        </div>
         <div class="canvas" id="canvas">
           <div class="pane original" id="pane-original" data-label="Origineel"></div>
           <div class="pane score" id="pane-score" data-label="Getransponeerd"></div>
@@ -222,9 +248,10 @@
     <form method="dialog">
       <h2>Zo werkt het</h2>
       <ol class="help">
-        <li><b>Importeer</b> een PDF, foto of MusicXML-bestand. Bij een PDF leest Audiveris de noten (dit duurt even per pagina).</li>
+        <li><b>Importeer</b> een PDF, foto of MusicXML-bestand, of plak een schermafbeelding met Ctrl+V. Twee herkenningsprogramma's lezen de noten; de app kiest het beste resultaat.</li>
         <li><b>Controleer</b> de herkenning met <i>Naast elkaar</i>. Klopt er iets niet? Kies <i>Openen in MuseScore</i>, verbeter het daar, sla op, en kies <i>Gecorrigeerde versie inladen</i>.</li>
-        <li><b>Transponeer</b> met de knoppen of typ een opdracht.</li>
+        <li><b>Verbeter</b> foute noten met de knop <i>Verbeteren</i>: klik een noot, dan ↑/↓, ♯ ♭ ♮, Delete voor een rust, Ctrl+Z ongedaan maken.</li>
+        <li><b>Transponeer</b> met de knoppen, kies een instrument (van → naar), of typ een opdracht.</li>
         <li><b>Download</b> als PDF.</li>
       </ol>
       <h3>Sneltoetsen</h3>
